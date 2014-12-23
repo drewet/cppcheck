@@ -134,6 +134,10 @@ bool CmdLineParser::ParseFromArgs(int argc, const char* const argv[])
         else if (std::strcmp(argv[i], "--debug-fp") == 0)
             _settings->debugFalsePositive = true;
 
+        // dump cppcheck data
+        else if (std::strcmp(argv[i], "--dump") == 0)
+            _settings->dump = true;
+
         // (Experimental) exception handling inside cppcheck client
         else if (std::strcmp(argv[i], "--exception-handling") == 0)
             _settings->exceptionHandling = true;
@@ -284,12 +288,16 @@ bool CmdLineParser::ParseFromArgs(int argc, const char* const argv[])
             _settings->_relativePaths = true;
             if (argv[i][argv[i][3]=='='?4:17] != 0) {
                 std::string paths = argv[i]+(argv[i][3]=='='?4:17);
-                std::string::size_type pos;
-                do {
-                    pos = paths.find(';');
-                    _settings->_basePaths.push_back(Path::fromNativeSeparators(paths.substr(0, pos)));
-                    paths.erase(0, pos+1);
-                } while (pos != std::string::npos);
+                for (;;) {
+                    std::string::size_type pos = paths.find(';');
+                    if (pos == std::string::npos) {
+                        _settings->_basePaths.push_back(Path::fromNativeSeparators(paths));
+                        break;
+                    } else {
+                        _settings->_basePaths.push_back(Path::fromNativeSeparators(paths.substr(0, pos)));
+                        paths.erase(0, pos + 1);
+                    }
+                }
             } else {
                 PrintMessage("cppcheck: No paths specified for the '" + std::string(argv[i]) + "' option.");
                 return false;
@@ -507,25 +515,34 @@ bool CmdLineParser::ParseFromArgs(int argc, const char* const argv[])
             Library::Error err = _settings->library.load(argv[0], argv[i]+10);
             std::string errmsg;
             switch (err.errorcode) {
-            case Library::ErrorCode::OK:
+            case Library::OK:
                 break;
-            case Library::ErrorCode::FILE_NOT_FOUND:
+            case Library::FILE_NOT_FOUND:
                 errmsg = "File not found";
                 break;
-            case Library::ErrorCode::BAD_XML:
+            case Library::BAD_XML:
                 errmsg = "Bad XML";
                 break;
-            case Library::ErrorCode::BAD_ELEMENT:
+            case Library::BAD_ELEMENT:
                 errmsg = "Unexpected element";
                 break;
-            case Library::ErrorCode::MISSING_ATTRIBUTE:
+            case Library::MISSING_ATTRIBUTE:
                 errmsg = "Missing attribute";
                 break;
-            case Library::ErrorCode::BAD_ATTRIBUTE:
+            case Library::BAD_ATTRIBUTE:
                 errmsg = "Bad attribute";
                 break;
-            case Library::ErrorCode::BAD_ATTRIBUTE_VALUE:
+            case Library::BAD_ATTRIBUTE_VALUE:
                 errmsg = "Bad attribute value";
+                break;
+            case Library::UNSUPPORTED_FORMAT:
+                errmsg = "File is of unsupported format version";
+                break;
+            case Library::DUPLICATE_PLATFORM_TYPE:
+                errmsg = "Duplicate platform type";
+                break;
+            case Library::PLATFORM_TYPE_REDEFINED:
+                errmsg = "Platform type redefined";
                 break;
             }
             if (!err.reason.empty())
@@ -650,7 +667,7 @@ bool CmdLineParser::ParseFromArgs(int argc, const char* const argv[])
                 const std::string& name((*it)->name());
                 const std::string info((*it)->classInfo());
                 if (!name.empty() && !info.empty())
-                    doc << "===" << name << "===\n"
+                    doc << "## " << name << " ##\n"
                         << info << "\n";
             }
 
@@ -673,7 +690,7 @@ bool CmdLineParser::ParseFromArgs(int argc, const char* const argv[])
             else {
                 std::string message("cppcheck: error: unrecognized showtime mode: \"");
                 message += showtimeMode;
-                message +=  "\".";
+                message +=  "\". Supported modes: file, summary, top5.";
                 PrintMessage(message);
                 return false;
             }
@@ -843,6 +860,9 @@ void CmdLineParser::PrintHelp()
               "                         analysis is disabled by this flag.\n"
               "    --check-library      Show information messages when library files have\n"
               "                         incomplete info.\n"
+              "    --dump               Dump xml data for each translation unit. The dump\n"
+              "                         files have the extension .dump and contain ast,\n"
+              "                         tokenlist, symboldatabase, valueflow.\n"
               "    -D<ID>               Define preprocessor symbol. Unless --max-configs or\n"
               "                         --force is used, Cppcheck will only check the given\n"
               "                         configuration when -D is used.\n"

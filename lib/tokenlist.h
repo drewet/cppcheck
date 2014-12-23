@@ -40,6 +40,19 @@ public:
         _settings = settings;
     }
 
+    /** @return the source file path. e.g. "file.cpp" */
+    const std::string& getSourceFilePath() const;
+
+    /** Is the code C. Used for bailouts */
+    bool isC() const {
+        return _isC;
+    }
+
+    /** Is the code CPP. Used for bailouts */
+    bool isCPP() const {
+        return _isCPP;
+    }
+
     /**
      * Delete all tokens in given token list
      * @param tok token list to delete
@@ -60,7 +73,7 @@ public:
      * @param code input stream for code
      * @param file0 source file name
      */
-    bool createTokens(std::istream &code, const std::string& file0 = "");
+    bool createTokens(std::istream &code, const std::string& file0 = emptyString);
 
     /** Deallocate list */
     void deallocateTokens();
@@ -107,6 +120,12 @@ public:
      */
     std::string fileLine(const Token *tok) const;
 
+    /**
+    * Calculates a 64-bit checksum of the token list used to compare
+    * multiple token lists with each other as quickly as possible.
+    */
+    unsigned long long calculateChecksum() const;
+
     void createAst();
 
 private:
@@ -127,6 +146,9 @@ private: /// private
 
     /** settings */
     const Settings* _settings;
+
+    /** File is known to be C/C++ code */
+    bool _isC, _isCPP;
 };
 
 /// @}

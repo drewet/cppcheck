@@ -65,9 +65,6 @@ private:
         return new UninitVar(*this);
     }
 
-    /** no implementation => compiler error if used */
-    void operator=(const UninitVar &);
-
     /** internal constructor for creating extra checks */
     UninitVar(Check *c, const Variable* v, const SymbolDatabase* db, const Library *lib, bool isc)
         : ExecutionPath(c, v->declarationId()), symbolDatabase(db), library(lib), isC(isc), var(v), alloc(false), strncpy_(false), memset_nonzero(false) {
@@ -436,13 +433,7 @@ private:
                 if (var2->isPointer())
                     checks.push_back(new UninitVar(owner, var2, symbolDatabase, library, isC));
                 else if (var2->typeEndToken()->str() != ">") {
-                    bool stdtype = false;  // TODO: change to isC to handle unknown types better
-                    for (const Token* tok2 = var2->typeStartToken(); tok2 != var2->nameToken(); tok2 = tok2->next()) {
-                        if (tok2->isStandardType()) {
-                            stdtype = true;
-                            break;
-                        }
-                    }
+                    bool stdtype = var2->typeStartToken()->isStandardType(); // TODO: change to isC to handle unknown types better
                     if (stdtype && (!var2->isArray() || var2->nameToken()->linkAt(1)->strAt(1) == ";"))
                         checks.push_back(new UninitVar(owner, var2, symbolDatabase, library, isC));
                 }
@@ -610,7 +601,7 @@ private:
             }
         }
 
-        if (Token::Match(&tok, "%var% (") && uvarFunctions.find(tok.str()) == uvarFunctions.end()) {
+        if (Token::Match(&tok, "%var% (")) {
             // sizeof/typeof doesn't dereference. A function name that is all uppercase
             // might be an unexpanded macro that uses sizeof/typeof
             if (Token::Match(&tok, "sizeof|typeof ("))
@@ -929,9 +920,6 @@ private:
 
 public:
 
-    /** Functions that don't handle uninitialized variables well */
-    static std::set<std::string> uvarFunctions;
-
     static void analyseFunctions(const Token * const tokens, std::set<std::string> &func) {
         for (const Token *tok = tokens; tok; tok = tok->next()) {
             if (tok->str() == "{") {
@@ -1022,34 +1010,34 @@ public:
     }
 };
 
-/** Functions that don't handle uninitialized variables well */
-std::set<std::string> UninitVar::uvarFunctions;
-
-
 /// @}
 
 
-void CheckUninitVar::analyse(const Token * tokens, std::set<std::string> &func) const
+Check::FileInfo *CheckUninitVar::getFileInfo(const Tokenizer *tokenizer, const Settings *settings) const
 {
-    UninitVar::analyseFunctions(tokens, func);
+    (void)settings;
+    MyFileInfo * mfi = new MyFileInfo;
+    analyseFunctions(tokenizer, mfi->uvarFunctions);
+    // TODO: add suspicious function calls
+    return mfi;
 }
 
-void CheckUninitVar::saveAnalysisData(const std::set<std::string> &data) const
+void CheckUninitVar::analyseWholeProgram(const std::list<Check::FileInfo*> &fileInfo, ErrorLogger &errorLogger)
 {
-    UninitVar::uvarFunctions.insert(data.begin(), data.end());
+    (void)fileInfo;
+    (void)errorLogger;
+}
+
+void CheckUninitVar::analyseFunctions(const Tokenizer *tokenizer, std::set<std::string> &f) const
+{
+    UninitVar::analyseFunctions(tokenizer->tokens(), f);
 }
 
 void CheckUninitVar::executionPaths()
 {
     // check if variable is accessed uninitialized..
-    {
-        // no writing if multiple threads are used (TODO: thread safe analysis?)
-        if (_settings->_jobs == 1)
-            UninitVar::analyseFunctions(_tokenizer->tokens(), UninitVar::uvarFunctions);
-
-        UninitVar c(this, _tokenizer->getSymbolDatabase(), &_settings->library, _tokenizer->isC());
-        checkExecutionPaths(_tokenizer->getSymbolDatabase(), &c);
-    }
+    UninitVar c(this, _tokenizer->getSymbolDatabase(), &_settings->library, _tokenizer->isC());
+    checkExecutionPaths(_tokenizer->getSymbolDatabase(), &c);
 }
 
 
@@ -1080,7 +1068,7 @@ void CheckUninitVar::checkScope(const Scope* scope)
             if (start && Token::simpleMatch(start->previous(), "catch ("))
                 continue;
         }
-        if (i->nameToken()->strAt(1) == "(")
+        if (i->nameToken()->strAt(1) == "(" || i->nameToken()->strAt(1) == "{")
             continue;
         bool stdtype = _tokenizer->isC();
         const Token* tok = i->typeStartToken();
@@ -1137,7 +1125,7 @@ void CheckUninitVar::checkStruct(const Scope* scope, const Token *tok, const Var
         if (scope2->className == structname && scope2->numConstructors == 0U) {
             for (std::list<Variable>::const_iterator it = scope2->varlist.begin(); it != scope2->varlist.end(); ++it) {
                 const Variable &var = *it;
-                if (!var.isArray()) {
+                if (!var.hasDefault() && !var.isArray()) {
                     // is the variable declared in a inner union?
                     bool innerunion = false;
                     for (std::list<Scope>::const_iterator it2 = symbolDatabase->scopeList.begin(); it2 != symbolDatabase->scopeList.end(); ++it2) {
@@ -1295,7 +1283,7 @@ bool CheckUninitVar::checkScopeForVariable(const Scope* scope, const Token *tok,
                             if (tok2->isName() && tok2->next()->isName())
                                 condition += ' ';
                         }
-                        reportError(tok, Severity::debug, "debug", "bailout uninitialized variable checking for '" + var.nameToken()->str() + "'. can't determine if this condition can be false when previous condition is false: " + condition);
+                        reportError(tok, Severity::debug, "debug", "bailout uninitialized variable checking for '" + var.name() + "'. can't determine if this condition can be false when previous condition is false: " + condition);
                     }
                     return true;
                 }
@@ -1534,6 +1522,8 @@ bool CheckUninitVar::checkScopeForVariable(const Scope* scope, const Token *tok,
 bool CheckUninitVar::checkIfForWhileHead(const Token *startparentheses, const Variable& var, bool suppressErrors, bool isuninit, bool alloc, const std::string &membervar)
 {
     const Token * const endpar = startparentheses->link();
+    if (Token::Match(startparentheses, "( ! %var% %oror%") && startparentheses->tokAt(2)->getValue(0))
+        suppressErrors = true;
     for (const Token *tok = startparentheses->next(); tok && tok != endpar; tok = tok->next()) {
         if (tok->varId() == var.declarationId()) {
             if (Token::Match(tok, "%var% . %var%")) {
@@ -1673,17 +1663,41 @@ void CheckUninitVar::checkRhs(const Token *tok, const Variable &var, bool alloc,
 
 bool CheckUninitVar::isVariableUsage(const Token *vartok, bool pointer, bool alloc, bool cpp)
 {
-    if (vartok->previous()->str() == "return" && !alloc)
+    if (!alloc && vartok->previous()->str() == "return")
         return true;
 
     // Passing variable to typeof/__alignof__
     if (Token::Match(vartok->tokAt(-3), "typeof|__alignof__ ( * %var%"))
         return false;
 
+    // Accessing Rvalue member using "." or "->"
+    if (vartok->strAt(1) == "." && vartok->strAt(-1) != "&") {
+        // Is struct member passed to function?
+        if (!pointer && Token::Match(vartok->previous(), "[,(] %var% . %var%")) {
+            // TODO: there are FN currently:
+            // - should only return false if struct member is (or might be) array.
+            // - should only return false if function argument is (or might be) non-const pointer or reference
+            const Token *tok2 = vartok->next();
+            while (Token::Match(tok2,". %var%"))
+                tok2 = tok2->tokAt(2);
+            if (Token::Match(tok2, "[,)]"))
+                return false;
+        }
+        bool assignment = false;
+        const Token* parent = vartok->astParent();
+        while (parent) {
+            if (parent->str() == "=") {
+                assignment = true;
+                break;
+            }
+            parent = parent->astParent();
+        }
+        if (!assignment)
+            return true;
+    }
+
     // Passing variable to function..
     if (Token::Match(vartok->previous(), "[(,] %var% [,)]") || Token::Match(vartok->tokAt(-2), "[(,] & %var% [,)]")) {
-        const bool address(vartok->previous()->str() == "&");
-
         // locate start parentheses in function call..
         unsigned int argumentNumber = 0;
         const Token *start = vartok;
@@ -1702,6 +1716,7 @@ bool CheckUninitVar::isVariableUsage(const Token *vartok, bool pointer, bool all
             if (func) {
                 const Variable *arg = func->getArgumentVar(argumentNumber);
                 if (arg) {
+                    const bool address(vartok->previous()->str() == "&");
                     const Token *argStart = arg->typeStartToken();
                     while (argStart->previous() && argStart->previous()->isName())
                         argStart = argStart->previous();
@@ -1873,7 +1888,7 @@ bool CheckUninitVar::isMemberVariableAssignment(const Token *tok, const std::str
                     return false;
             }
 
-            else if (Token::simpleMatch(ftok ? ftok->previous() : nullptr, "= * ("))
+            else if (ftok && Token::simpleMatch(ftok->previous(), "= * ("))
                 return false;
         }
         return true;
@@ -1932,4 +1947,39 @@ void CheckUninitVar::uninitStructMemberError(const Token *tok, const std::string
                 Severity::error,
                 "uninitStructMember",
                 "Uninitialized struct member: " + membername);
+}
+
+void CheckUninitVar::deadPointer()
+{
+    const bool cpp = _tokenizer->isCPP();
+    const SymbolDatabase *symbolDatabase = _tokenizer->getSymbolDatabase();
+    std::list<Scope>::const_iterator scope;
+
+    // check every executable scope
+    for (scope = symbolDatabase->scopeList.begin(); scope != symbolDatabase->scopeList.end(); ++scope) {
+        if (!scope->isExecutable())
+            continue;
+        // Dead pointers..
+        for (const Token* tok = scope->classStart; tok != scope->classEnd; tok = tok->next()) {
+            if (tok->variable() &&
+                tok->variable()->isPointer() &&
+                isVariableUsage(tok, true, false, cpp)) {
+                const Token *alias = tok->getValueTokenDeadPointer();
+                if (alias) {
+                    deadPointerError(tok,alias);
+                }
+            }
+        }
+    }
+}
+
+void CheckUninitVar::deadPointerError(const Token *pointer, const Token *alias)
+{
+    const std::string strpointer(pointer ? pointer->str() : std::string("pointer"));
+    const std::string stralias(alias ? alias->expressionString() : std::string("&x"));
+
+    reportError(pointer,
+                Severity::error,
+                "deadpointer",
+                "Dead pointer usage. Pointer '" + strpointer + "' is dead if it has been assigned '" + stralias + "' at line " + MathLib::toString(alias ? alias->linenr() : 0U) + ".");
 }

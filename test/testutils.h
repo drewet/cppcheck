@@ -30,18 +30,36 @@ private:
     Tokenizer _tokenizer;
 
 public:
-    givenACodeSampleToTokenize(const char sample[], bool createOnly = false)
+    explicit givenACodeSampleToTokenize(const char sample[], bool createOnly = false, bool cpp = true)
         : _tokenizer(&_settings, 0) {
         std::istringstream iss(sample);
         if (createOnly)
-            _tokenizer.list.createTokens(iss);
+            _tokenizer.list.createTokens(iss, cpp ? "test.cpp" : "test.c");
         else
-            _tokenizer.tokenize(iss, "test.cpp");
+            _tokenizer.tokenize(iss, cpp ? "test.cpp" : "test.c");
     }
 
     const Token* tokens() const {
         return _tokenizer.tokens();
     }
+};
+
+
+class SimpleSuppressor : public ErrorLogger {
+public:
+    SimpleSuppressor(Settings &settings, ErrorLogger *next)
+        : _settings(settings), _next(next) {
+    }
+    virtual void reportOut(const std::string &outmsg) {
+        _next->reportOut(outmsg);
+    }
+    virtual void reportErr(const ErrorLogger::ErrorMessage &msg) {
+        if (!msg._callStack.empty() && !_settings.nomsg.isSuppressed(msg._id, msg._callStack.begin()->getfile(), msg._callStack.begin()->line))
+            _next->reportErr(msg);
+    }
+private:
+    Settings &_settings;
+    ErrorLogger *_next;
 };
 
 #endif // TestUtilsH

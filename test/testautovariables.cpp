@@ -41,6 +41,7 @@ private:
         Settings settings;
         settings.inconclusive = inconclusive;
         settings.addEnabled("warning");
+        settings.addEnabled("style");
 
         // Tokenize..
         Tokenizer tokenizer(&settings, this);
@@ -56,10 +57,7 @@ private:
             tokenizer.simplifyTokenList2();
             const std::string str2(tokenizer.tokens()->stringifyList(0,true));
             if (str1 != str2)
-                warn(("Unsimplified code in test case. It looks like this test "
-                      "should either be cleaned up or moved to TestTokenizer or "
-                      "TestSimplifyTokens instead.\nstr1="+str1+"\nstr2="+str2).c_str());
-
+                warnUnsimplified(str1, str2);
 
             // Check auto variables
             checkAutoVariables.autoVariables();
@@ -81,6 +79,7 @@ private:
         TEST_CASE(testautovar11); // ticket #4641 - fp, assign local struct member address to function parameter
         TEST_CASE(testautovar12); // ticket #5024 - crash
         TEST_CASE(testautovar13); // ticket #5537 - crash
+        TEST_CASE(testautovar14); // ticket #4776 - assignment of function parameter, goto
         TEST_CASE(testautovar_array1);
         TEST_CASE(testautovar_array2);
         TEST_CASE(testautovar_return1);
@@ -132,7 +131,7 @@ private:
               "    int num = 2;\n"
               "    res = &num;\n"
               "}");
-        ASSERT_EQUALS("[test.cpp:4]: (warning) Assignment of function parameter has no effect outside the function.\n", errout.str());
+        ASSERT_EQUALS("[test.cpp:4]: (warning) Assignment of function parameter has no effect outside the function. Did you forget dereferencing it?\n", errout.str());
 
         check("void func1(int **res)\n"
               "{\n"
@@ -161,7 +160,7 @@ private:
               "    int num = 2;\n"
               "    res = &num;\n"
               "}");
-        ASSERT_EQUALS("[test.cpp:7]: (warning) Assignment of function parameter has no effect outside the function.\n", errout.str());
+        ASSERT_EQUALS("[test.cpp:7]: (warning) Assignment of function parameter has no effect outside the function. Did you forget dereferencing it?\n", errout.str());
 
         check("class Fred {\n"
               "    void func1(int **res);\n"
@@ -264,12 +263,12 @@ private:
         check("void foo(char* p) {\n"
               "    p = 0;\n"
               "}");
-        ASSERT_EQUALS("[test.cpp:2]: (warning) Assignment of function parameter has no effect outside the function.\n", errout.str());
+        ASSERT_EQUALS("[test.cpp:2]: (warning) Assignment of function parameter has no effect outside the function. Did you forget dereferencing it?\n", errout.str());
 
         check("void foo(int b) {\n"
               "    b = foo(b);\n"
               "}");
-        ASSERT_EQUALS("[test.cpp:2]: (warning) Assignment of function parameter has no effect outside the function.\n", errout.str());
+        ASSERT_EQUALS("[test.cpp:2]: (style) Assignment of function parameter has no effect outside the function.\n", errout.str());
 
         check("void foo(char* p) {\n"
               "    if (!p) p = buf;\n"
@@ -297,13 +296,13 @@ private:
         check("void foo(Foo* p) {\n"
               "    p = 0;\n"
               "}");
-        ASSERT_EQUALS("[test.cpp:2]: (warning) Assignment of function parameter has no effect outside the function.\n", errout.str());
+        ASSERT_EQUALS("[test.cpp:2]: (warning) Assignment of function parameter has no effect outside the function. Did you forget dereferencing it?\n", errout.str());
 
         check("class Foo {};\n"
               "void foo(Foo p) {\n"
               "    p = 0;\n"
               "}");
-        ASSERT_EQUALS("[test.cpp:3]: (warning) Assignment of function parameter has no effect outside the function.\n", errout.str());
+        ASSERT_EQUALS("[test.cpp:3]: (style) Assignment of function parameter has no effect outside the function.\n", errout.str());
 
         check("void foo(Foo p) {\n"
               "    p = 0;\n"
@@ -321,6 +320,11 @@ private:
               "    return d;"
               "}",false,false);
         ASSERT_EQUALS("", errout.str());
+
+        check("void foo(int* ptr) {\n" // #4793
+              "    ptr++;\n"
+              "}");
+        ASSERT_EQUALS("[test.cpp:2]: (warning) Assignment of function parameter has no effect outside the function. Did you forget dereferencing it?\n", errout.str());
     }
 
     void testautovar11() { // #4641 - fp, assign local struct member address to function parameter
@@ -373,6 +377,17 @@ private:
               "    delete &UniqueRealDirs;\n"
               "   }\n"
               "};\n");
+    }
+
+    void testautovar14() { // Ticket #4776
+        check("void f(int x) {\n"
+              "label:"
+              "  if (x>0) {\n"
+              "    x = x >> 1;\n"
+              "    goto label;\n"
+              "  }\n"
+              "}");
+        ASSERT_EQUALS("", errout.str());
     }
 
     void testautovar_array1() {

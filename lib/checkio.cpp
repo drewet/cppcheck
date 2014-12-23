@@ -38,6 +38,9 @@ namespace {
 //---------------------------------------------------------------------------
 void CheckIO::checkCoutCerrMisusage()
 {
+    if (_tokenizer->isC())
+        return;
+
     const SymbolDatabase * const symbolDatabase = _tokenizer->getSymbolDatabase();
     std::size_t functions = symbolDatabase->functionScopes.size();
     for (std::size_t i = 0; i < functions; ++i) {
@@ -85,7 +88,7 @@ struct Filepointer {
     unsigned int op_indent;
     enum AppendMode { UNKNOWN_AM, APPEND, APPEND_EX };
     AppendMode append_mode;
-    Filepointer(OpenMode mode_ = UNKNOWN_OM)
+    explicit Filepointer(OpenMode mode_ = UNKNOWN_OM)
         : mode(mode_), mode_indent(0), lastOperation(NONE), op_indent(0), append_mode(UNKNOWN_AM) {
     }
 };
@@ -176,12 +179,21 @@ void CheckIO::checkFileUsage()
                     operation = Filepointer::OPEN;
                 } else if ((tok->str() == "rewind" || tok->str() == "fseek" || tok->str() == "fsetpos" || tok->str() == "fflush") ||
                            (windows && tok->str() == "_fseeki64")) {
-                    if (Token::simpleMatch(tok, "fflush ( stdin )"))
-                        fflushOnInputStreamError(tok, tok->strAt(2));
-                    else {
+                    if (_settings->isEnabled("portability") && tok->str() == "fflush") {
                         fileTok = tok->tokAt(2);
-                        operation = Filepointer::POSITIONING;
+                        if (fileTok) {
+                            if (fileTok->str() == "stdin")
+                                fflushOnInputStreamError(tok, fileTok->str());
+                            else {
+                                Filepointer& f = filepointers[fileTok->varId()];
+                                if (f.mode == READ_MODE)
+                                    fflushOnInputStreamError(tok, fileTok->str());
+                            }
+                        }
                     }
+
+                    fileTok = tok->tokAt(2);
+                    operation = Filepointer::POSITIONING;
                 } else if (tok->str() == "fgetc" || tok->str() == "fgetwc" ||
                            tok->str() == "fgets" || tok->str() == "fgetws" || tok->str() == "fread" ||
                            tok->str() == "fscanf" || tok->str() == "fwscanf" || tok->str() == "getc" ||
@@ -208,7 +220,7 @@ void CheckIO::checkFileUsage()
                     if ((tok->str() == "ungetc" || tok->str() == "ungetwc") && fileTok)
                         fileTok = fileTok->nextArgument();
                     operation = Filepointer::UNIMPORTANT;
-                } else if (!Token::Match(tok, "if|for|while|catch|switch")) {
+                } else if (!Token::Match(tok, "if|for|while|catch|switch") && _settings->library.functionpure.find(tok->str()) == _settings->library.functionpure.end()) {
                     const Token* const end2 = tok->linkAt(1);
                     for (const Token* tok2 = tok->tokAt(2); tok2 != end2; tok2 = tok2->next()) {
                         if (tok2->varId() && filepointers.find(tok2->varId()) != filepointers.end()) {
@@ -297,8 +309,8 @@ void CheckIO::checkFileUsage()
 
 void CheckIO::fflushOnInputStreamError(const Token *tok, const std::string &varname)
 {
-    reportError(tok, Severity::error,
-                "fflushOnInputStream", "fflush() called on input stream '" + varname + "' results in undefined behaviour.");
+    reportError(tok, Severity::portability,
+                "fflushOnInputStream", "fflush() called on input stream '" + varname + "' may result in undefined behaviour on non-linux systems.");
 }
 
 void CheckIO::ioWithoutPositioningError(const Token *tok)
@@ -338,7 +350,9 @@ void CheckIO::seekOnAppendedFileError(const Token *tok)
 //---------------------------------------------------------------------------
 void CheckIO::invalidScanf()
 {
-    if (!_settings->isEnabled("warning") && !_settings->isEnabled("portability"))
+    const bool warning = _settings->isEnabled("warning");
+    const bool portability = _settings->isEnabled("portability");
+    if (!warning && !portability)
         return;
 
     const bool windows = _settings->isWindowsPlatform();
@@ -363,7 +377,7 @@ void CheckIO::invalidScanf()
 
             // scan the string backwards, so we do not need to keep states
             const std::string &formatstr(formatToken->str());
-            for (unsigned int i = 1; i < formatstr.length(); i++) {
+            for (std::size_t i = 1; i < formatstr.length(); i++) {
                 if (formatstr[i] == '%')
                     format = !format;
 
@@ -375,9 +389,9 @@ void CheckIO::invalidScanf()
                 }
 
                 else if (std::isalpha((unsigned char)formatstr[i]) || formatstr[i] == '[') {
-                    if ((formatstr[i] == 's' || formatstr[i] == '[' || formatstr[i] == 'S' || (formatstr[i] == 'l' && formatstr[i+1] == 's')) && _settings->isEnabled("warning"))  // #3490 - field width limits are only necessary for string input
+                    if (warning && (formatstr[i] == 's' || formatstr[i] == '[' || formatstr[i] == 'S' || (formatstr[i] == 'l' && formatstr[i+1] == 's')))  // #3490 - field width limits are only necessary for string input
                         invalidScanfError(tok, false);
-                    else if (formatstr[i] != 'n' && formatstr[i] != 'c' && !windows && _settings->isEnabled("portability"))
+                    else if (portability && formatstr[i] != 'n' && formatstr[i] != 'c' && !windows)
                         invalidScanfError(tok, true); // Warn about libc bug in versions prior to 2.13-25
                     format = false;
                 }
@@ -390,7 +404,7 @@ void CheckIO::invalidScanfError(const Token *tok, bool portability)
 {
     if (portability)
         reportError(tok, Severity::portability,
-                    "invalidscanf", "scanf without field width limits can crash with huge input data on some versions of libc.\n"
+                    "invalidscanf_libc", "scanf without field width limits can crash with huge input data on some versions of libc.\n"
                     "scanf without field width limits can crash with huge input data on libc versions older than 2.13-25. Add a field "
                     "width specifier to fix this problem:\n"
                     "    %i => %3i\n"
@@ -424,7 +438,12 @@ void CheckIO::invalidScanfError(const Token *tok, bool portability)
                     "    return 0;\n"
                     "}\n"
                     "\n"
-                    "To make it crash, type in more than 5 characters.");
+                    "Typing in 5 or more characters may make the program crash. The correct usage "
+                    "here is 'scanf(\"%4s\", c);', as the maximum field width does not include the "
+                    "terminating null byte.\n"
+                    "Source: http://linux.die.net/man/3/scanf\n"
+                    "Source: http://www.opensource.apple.com/source/xnu/xnu-1456.1.26/libkern/stdio/scanf.c"
+                   );
 }
 
 //---------------------------------------------------------------------------
@@ -511,7 +530,7 @@ void CheckIO::checkWrongPrintfScanfArguments()
 
             if (formatStringArgNo >= 0) {
                 // formatstring found in library. Find format string and first argument belonging to format string.
-                if (!findFormat(formatStringArgNo, tok->tokAt(2), &formatStringTok, &argListTok))
+                if (!findFormat(static_cast<unsigned int>(formatStringArgNo), tok->tokAt(2), &formatStringTok, &argListTok))
                     continue;
             } else if (windows && Token::Match(tok, "Format|AppendFormat (") &&
                        Token::Match(tok->tokAt(-2), "%var% .") && tok->tokAt(-2)->variable() &&
@@ -652,7 +671,7 @@ void CheckIO::checkWrongPrintfScanfArguments()
                         // Perform type checks
                         ArgumentInfo argInfo(argListTok, _settings);
 
-                        if (argInfo.typeToken) {
+                        if (argInfo.typeToken && !argInfo.isLibraryType(_settings)) {
                             if (scan) {
                                 std::string specifier;
                                 bool done = false;
@@ -1011,7 +1030,7 @@ void CheckIO::checkWrongPrintfScanfArguments()
                                 while (!done) {
                                     switch (*i) {
                                     case 's':
-                                        if (argInfo.variableInfo && argListTok->type() != Token::eString &&
+                                        if (argListTok->type() != Token::eString &&
                                             argInfo.isKnownType() && !argInfo.isArrayOrPointer()) {
                                             if (!Token::Match(argInfo.typeToken, "char|wchar_t")) {
                                                 if (!(!argInfo.isArrayOrPointer() && argInfo.element))
@@ -1021,7 +1040,7 @@ void CheckIO::checkWrongPrintfScanfArguments()
                                         done = true;
                                         break;
                                     case 'n':
-                                        if ((argInfo.variableInfo && argInfo.isKnownType() && (!argInfo.isArrayOrPointer() || argInfo.typeToken->strAt(-1) == "const")) || argListTok->type() == Token::eString)
+                                        if ((argInfo.isKnownType() && (!argInfo.isArrayOrPointer() || argInfo.typeToken->strAt(-1) == "const")) || argListTok->type() == Token::eString)
                                             invalidPrintfArgTypeError_n(tok, numFormat, &argInfo);
                                         done = true;
                                         break;
@@ -1322,10 +1341,12 @@ void CheckIO::checkWrongPrintfScanfArguments()
                 argListTok2 = argListTok2->nextArgument(); // Find next argument
             }
 
-            // Check that all parameter positions reference an actual parameter
-            for (std::set<unsigned int>::const_iterator it = parameterPositionsUsed.begin() ; it != parameterPositionsUsed.end() ; ++it) {
-                if (((*it == 0) || (*it > numFormat)) && _settings->isEnabled("warning"))
-                    wrongPrintfScanfPosixParameterPositionError(tok, tok->str(), *it, numFormat);
+            if (warning) {
+                // Check that all parameter positions reference an actual parameter
+                for (std::set<unsigned int>::const_iterator it = parameterPositionsUsed.begin() ; it != parameterPositionsUsed.end() ; ++it) {
+                    if ((*it == 0) || (*it > numFormat))
+                        wrongPrintfScanfPosixParameterPositionError(tok, tok->str(), *it, numFormat);
+                }
             }
 
             // Mismatching number of parameters => warning
@@ -1358,7 +1379,7 @@ CheckIO::ArgumentInfo::ArgumentInfo(const Token * tok, const Settings *settings)
                     Token::Match(tok->linkAt(1)->linkAt(1), ") ,|)"))) {
             if (Token::Match(tok, "static_cast|reinterpret_cast|const_cast")) {
                 typeToken = tok->tokAt(2);
-                if (typeToken->str() == "const")
+                while (typeToken->str() == "const" || typeToken->str() == "extern")
                     typeToken = typeToken->next();
                 return;
             }
@@ -1380,36 +1401,34 @@ CheckIO::ArgumentInfo::ArgumentInfo(const Token * tok, const Settings *settings)
                             const Function * function = varTok->link()->previous()->function();
                             if (function && function->retDef) {
                                 typeToken = function->retDef;
-                                if (typeToken->str() == "const")
+                                while (typeToken->str() == "const" || typeToken->str() == "extern")
                                     typeToken = typeToken->next();
                                 functionInfo = function;
                                 element = true;
-                                return;
-                            } else
-                                return;
+                            }
+                            return;
                         }
                     } else if (tok1->previous()->str() == ")" && tok1->linkAt(-1)->previous()->type() == Token::eFunction) {
                         const Function * function = tok1->linkAt(-1)->previous()->function();
                         if (function && function->retDef) {
                             typeToken = function->retDef;
-                            if (typeToken->str() == "const")
+                            while (typeToken->str() == "const" || typeToken->str() == "extern")
                                 typeToken = typeToken->next();
                             functionInfo = function;
                             element = false;
-                            return;
-                        } else
-                            return;
+                        }
+                        return;
                     } else
                         varTok = tok1->previous();
                     break;
                 } else if (tok1->str() == "(" || tok1->str() == "{" || tok1->str() == "[")
                     tok1 = tok1->link();
-                else if (tok1->str() == "<" && tok1->link())
+                else if (tok1->link() && tok1->str() == "<")
                     tok1 = tok1->link();
 
                 // check for some common well known functions
-                else if ((Token::Match(tok1->previous(), "%var% . size|empty|c_str ( )") && isStdContainer(tok1->previous())) ||
-                         (Token::Match(tok1->previous(), "] . size|empty|c_str ( )") && Token::Match(tok1->previous()->link()->previous(), "%var%") && isStdContainer(tok1->previous()->link()->previous()))) {
+                else if ((Token::Match(tok1->previous(), "%var% . size|empty|c_str ( ) [,)]") && isStdContainer(tok1->previous())) ||
+                         (Token::Match(tok1->previous(), "] . size|empty|c_str ( ) [,)]") && Token::Match(tok1->previous()->link()->previous(), "%var%") && isStdContainer(tok1->previous()->link()->previous()))) {
                     tempToken = new Token(0);
                     tempToken->fileIndex(tok1->fileIndex());
                     tempToken->linenr(tok1->linenr());
@@ -1419,10 +1438,13 @@ CheckIO::ArgumentInfo::ArgumentInfo(const Token * tok, const Settings *settings)
                             tempToken->str("long");
                             if (settings->sizeof_long != 8)
                                 tempToken->isLong(true);
-                        } else if (settings->sizeof_size_t == 4 && settings->sizeof_long == 4)
-                            tempToken->str("long");
-                        else if (settings->sizeof_size_t == 4)
-                            tempToken->str("int");
+                        } else if (settings->sizeof_size_t == 4) {
+                            if (settings->sizeof_long == 4) {
+                                tempToken->str("long");
+                            } else {
+                                tempToken->str("int");
+                            }
+                        }
 
                         tempToken->originalName("size_t");
                         tempToken->isUnsigned(true);
@@ -1527,6 +1549,20 @@ bool CheckIO::ArgumentInfo::isStdVectorOrString()
                 return true;
             }
         }
+    } else if (variableInfo->type()) {
+        const Scope * classScope = variableInfo->type()->classScope;
+        if (classScope) {
+            std::list<Function>::const_iterator functions;
+            for (functions = classScope->functionList.begin();
+                 functions != classScope->functionList.end(); ++functions) {
+                if (functions->name() == "operator[]") {
+                    if (Token::Match(functions->retDef, "%type% &")) {
+                        typeToken = functions->retDef;
+                        return true;
+                    }
+                }
+            }
+        }
     }
 
     return false;
@@ -1549,19 +1585,22 @@ bool CheckIO::ArgumentInfo::isStdContainer(const Token *tok)
     };
 
     if (tok && tok->variable()) {
-        if (tok->variable()->isStlType(stl_container)) {
-            typeToken = tok->variable()->typeStartToken()->tokAt(4);
+        const Variable* variable = tok->variable();
+        if (variable->isStlType(stl_container)) {
+            typeToken = variable->typeStartToken()->tokAt(4);
             return true;
-        } else if (tok->variable()->isStlType(stl_string)) {
-            typeToken = tok->variable()->typeStartToken();
+        } else if (variable->isStlType(stl_string)) {
+            typeToken = variable->typeStartToken();
             return true;
-        } else if (tok->variable()->type() && !tok->variable()->type()->derivedFrom.empty()) {
-            for (std::size_t i = 0, e = tok->variable()->type()->derivedFrom.size(); i != e; ++i) {
-                if (Token::Match(tok->variable()->type()->derivedFrom[i].nameTok, "std :: vector|array|bitset|deque|list|forward_list|map|multimap|multiset|priority_queue|queue|set|stack|hash_map|hash_multimap|hash_set|unordered_map|unordered_multimap|unordered_set|unordered_multiset <")) {
-                    typeToken = tok->variable()->type()->derivedFrom[i].nameTok->tokAt(4);
+        } else if (variable->type() && !variable->type()->derivedFrom.empty()) {
+            const std::vector<Type::BaseInfo>& derivedFrom = variable->type()->derivedFrom;
+            for (std::size_t i = 0, e = derivedFrom.size(); i != e; ++i) {
+                const Token* nameTok = derivedFrom[i].nameTok;
+                if (Token::Match(nameTok, "std :: vector|array|bitset|deque|list|forward_list|map|multimap|multiset|priority_queue|queue|set|stack|hash_map|hash_multimap|hash_set|unordered_map|unordered_multimap|unordered_set|unordered_multiset <")) {
+                    typeToken = nameTok->tokAt(4);
                     return true;
-                } else if (Token::Match(tok->variable()->type()->derivedFrom[i].nameTok, "std :: string|wstring")) {
-                    typeToken = tok->variable()->type()->derivedFrom[i].nameTok;
+                } else if (Token::Match(nameTok, "std :: string|wstring")) {
+                    typeToken = nameTok;
                     return true;
                 }
             }
@@ -1592,17 +1631,11 @@ bool CheckIO::ArgumentInfo::isComplexType() const
     if (variableInfo->type())
         return (true);
 
-    static std::set<std::string> knownTypes;
-    if (knownTypes.empty()) {
-        knownTypes.insert("string");
-        knownTypes.insert("wstring");
-    }
-
     const Token* varTypeTok = typeToken;
     if (varTypeTok->str() == "std")
         varTypeTok = varTypeTok->tokAt(2);
 
-    return ((knownTypes.find(varTypeTok->str()) != knownTypes.end() || (varTypeTok->strAt(1) == "<" && varTypeTok->linkAt(1) && varTypeTok->linkAt(1)->strAt(1) != "::")) && !variableInfo->isArrayOrPointer());
+    return ((variableInfo->isStlStringType() || (varTypeTok->strAt(1) == "<" && varTypeTok->linkAt(1) && varTypeTok->linkAt(1)->strAt(1) != "::")) && !variableInfo->isArrayOrPointer());
 }
 
 bool CheckIO::ArgumentInfo::isKnownType() const
@@ -1610,9 +1643,14 @@ bool CheckIO::ArgumentInfo::isKnownType() const
     if (variableInfo)
         return (typeToken->isStandardType() || typeToken->next()->isStandardType() || isComplexType());
     else if (functionInfo)
-        return (typeToken->isStandardType() || functionInfo->retType);
+        return (typeToken->isStandardType() || functionInfo->retType || Token::Match(typeToken, "std :: string|wstring"));
 
     return typeToken->isStandardType() || Token::Match(typeToken, "std :: string|wstring");
+}
+
+bool CheckIO::ArgumentInfo::isLibraryType(const Settings *settings) const
+{
+    return typeToken && typeToken->isStandardType() && settings->library.podtype(typeToken->str());
 }
 
 void CheckIO::wrongPrintfScanfArgumentsError(const Token* tok,
@@ -1843,7 +1881,7 @@ void CheckIO::argumentType(std::ostream& os, const ArgumentInfo * argInfo)
                     os << type->str() << "::";
                     type = type->tokAt(2);
                 }
-                type->stringify(os, false, true);
+                type->stringify(os, false, true, false);
                 if (type->strAt(1) == "*" && !argInfo->element)
                     os << " *";
                 else if (argInfo->variableInfo && !argInfo->element && argInfo->variableInfo->isArray())
@@ -1859,7 +1897,7 @@ void CheckIO::argumentType(std::ostream& os, const ArgumentInfo * argInfo)
                 if (type->strAt(1) == "*" || argInfo->address)
                     os << " *";
                 os << " {aka ";
-                type->stringify(os, false, true);
+                type->stringify(os, false, true, false);
                 if (type->strAt(1) == "*" || argInfo->address)
                     os << " *";
                 os << "}";
@@ -1879,26 +1917,24 @@ void CheckIO::invalidLengthModifierError(const Token* tok, unsigned int numForma
 
 void CheckIO::invalidScanfFormatWidthError(const Token* tok, unsigned int numFormat, int width, const Variable *var)
 {
-    std::ostringstream errmsg;
-    Severity::SeverityType severity = Severity::warning;
-    bool inconclusive = false;
+    MathLib::bigint arrlen = 0;
+    std::string varname;
 
     if (var) {
-        if (var->dimension(0) > width) {
-            if (!_settings->inconclusive)
-                return;
-            inconclusive = true;
-            errmsg << "Width " << width << " given in format string (no. " << numFormat << ") is smaller than destination buffer"
-                   << " '" << var->name() << "[" << var->dimension(0) << "]'.";
-        } else {
-            errmsg << "Width " << width << " given in format string (no. " << numFormat << ") is larger than destination buffer '"
-                   << var->name() << "[" << var->dimension(0) << "]', use %" << (var->dimension(0) - 1) << "s to prevent overflowing it.";
-            severity = Severity::error;
-        }
+        arrlen = var->dimension(0);
+        varname = var->name();
+    }
 
-    } else
-        errmsg << "Width " << width << " given in format string (no. " << numFormat << ") doesn't match destination buffer.";
-
-    if (severity == Severity::error || _settings->isEnabled("style"))
-        reportError(tok, severity, "invalidScanfFormatWidth", errmsg.str(), inconclusive);
+    std::ostringstream errmsg;
+    if (arrlen > width) {
+        if (!_settings->inconclusive || !_settings->isEnabled("warning"))
+            return;
+        errmsg << "Width " << width << " given in format string (no. " << numFormat << ") is smaller than destination buffer"
+               << " '" << varname << "[" << arrlen << "]'.";
+        reportError(tok, Severity::warning, "invalidScanfFormatWidth_smaller", errmsg.str(), true);
+    } else {
+        errmsg << "Width " << width << " given in format string (no. " << numFormat << ") is larger than destination buffer '"
+               << varname << "[" << arrlen << "]', use %" << (arrlen - 1) << "s to prevent overflowing it.";
+        reportError(tok, Severity::error, "invalidScanfFormatWidth", errmsg.str(), false);
+    }
 }

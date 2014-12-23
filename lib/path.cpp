@@ -19,12 +19,12 @@
 #if defined(__GNUC__) && (defined(_WIN32) || defined(__CYGWIN__))
 #undef __STRICT_ANSI__
 #endif
+#include "path.h"
 #include <algorithm>
 #include <vector>
 #include <sstream>
 #include <cstring>
 #include <cctype>
-#include "path.h"
 
 /** Is the filesystem case insensitive? */
 static bool caseInsensitiveFilesystem()
@@ -109,14 +109,12 @@ std::string Path::simplifyPath(std::string originalPath)
 
 std::string Path::getPathFromFilename(const std::string &filename)
 {
-    std::string path = "";
-
     std::size_t pos = filename.find_last_of("\\/");
 
     if (pos != std::string::npos)
-        path = filename.substr(0, 1 + pos);
+        return filename.substr(0, 1 + pos);
 
-    return path;
+    return "";
 }
 
 
@@ -218,4 +216,22 @@ bool Path::isHeader(const std::string &path)
 {
     const std::string extension = getFilenameExtensionInLowerCase(path);
     return (extension.compare(0, 2, ".h") == 0);
+}
+
+std::string Path::getAbsoluteFilePath(const std::string& filePath)
+{
+    std::string absolute_path;
+#ifdef _WIN32
+    char absolute[_MAX_PATH];
+    if (_fullpath(absolute, filePath.c_str(), _MAX_PATH))
+        absolute_path = absolute;
+#elif defined(__linux__) || defined(__sun) || defined(__hpux) || defined(__GNUC__)
+    char * absolute = realpath(filePath.c_str(), NULL);
+    if (absolute)
+        absolute_path = absolute;
+    free(absolute);
+#else
+#error Platform absolute path function needed
+#endif
+    return absolute_path;
 }

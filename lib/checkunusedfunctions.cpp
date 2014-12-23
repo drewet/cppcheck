@@ -61,10 +61,10 @@ void CheckUnusedFunctions::parseTokens(const Tokenizer &tokenizer, const char Fi
 
         // No filename set yet..
         if (usage.filename.empty()) {
-            usage.filename = tokenizer.getSourceFilePath();
+            usage.filename = tokenizer.list.getSourceFilePath();
         }
         // Multiple files => filename = "+"
-        else if (usage.filename != tokenizer.getSourceFilePath()) {
+        else if (usage.filename != tokenizer.list.getSourceFilePath()) {
             //func.filename = "+";
             usage.usedOtherFile |= usage.usedSameFile;
         }
@@ -92,7 +92,7 @@ void CheckUnusedFunctions::parseTokens(const Tokenizer &tokenizer, const char Fi
                         _functions[markupVarToken->str()].usedOtherFile = true;
                     else if (markupVarToken->next()->str() == "(") {
                         FunctionUsage &func = _functions[markupVarToken->str()];
-                        func.filename = tokenizer.getSourceFilePath();
+                        func.filename = tokenizer.list.getSourceFilePath();
                         if (func.filename.empty() || func.filename == "+")
                             func.usedOtherFile = true;
                         else
@@ -105,60 +105,58 @@ void CheckUnusedFunctions::parseTokens(const Tokenizer &tokenizer, const char Fi
 
         if (!settings->library.markupFile(FileName) // only check source files
             && settings->library.isexporter(tok->str()) && tok->next() != 0) {
-            const Token * qPropToken = tok;
-            qPropToken = qPropToken->next();
-            while (qPropToken && qPropToken->str() != ")") {
-                if (settings->library.isexportedprefix(tok->str(), qPropToken->str())) {
-                    const Token* qNextPropToken = qPropToken->next();
-                    const std::string& value = qNextPropToken->str();
+            const Token * propToken = tok->next();
+            while (propToken && propToken->str() != ")") {
+                if (settings->library.isexportedprefix(tok->str(), propToken->str())) {
+                    const Token* nextPropToken = propToken->next();
+                    const std::string& value = nextPropToken->str();
                     if (_functions.find(value) != _functions.end()) {
                         _functions[value].usedOtherFile = true;
                     }
                 }
-                if (settings->library.isexportedsuffix(tok->str(), qPropToken->str())) {
-                    const Token* qNextPropToken = qPropToken->previous();
-                    const std::string& value = qNextPropToken->str();
+                if (settings->library.isexportedsuffix(tok->str(), propToken->str())) {
+                    const Token* prevPropToken = propToken->previous();
+                    const std::string& value = prevPropToken->str();
                     if (value != ")" && _functions.find(value) != _functions.end()) {
                         _functions[value].usedOtherFile = true;
                     }
                 }
-                qPropToken = qPropToken->next();
+                propToken = propToken->next();
             }
         }
 
         if (settings->library.markupFile(FileName)
             && settings->library.isimporter(FileName, tok->str()) && tok->next()) {
-            const Token * qPropToken = tok;
-            qPropToken = qPropToken->next();
-            if (qPropToken->next()) {
-                qPropToken = qPropToken->next();
-                while (qPropToken && qPropToken->str() != ")") {
-                    const std::string& value = qPropToken->str();
+            const Token * propToken = tok->next();
+            if (propToken->next()) {
+                propToken = propToken->next();
+                while (propToken && propToken->str() != ")") {
+                    const std::string& value = propToken->str();
                     if (!value.empty()) {
                         _functions[value].usedOtherFile = true;
                         break;
                     }
-                    qPropToken = qPropToken->next();
+                    propToken = propToken->next();
                 }
             }
         }
 
         if (settings->library.isreflection(tok->str())) {
-            const int index = settings->library.reflectionArgument(tok->str());
-            if (index >= 0) {
+            const int argIndex = settings->library.reflectionArgument(tok->str());
+            if (argIndex >= 0) {
                 const Token * funcToken = tok->next();
-                int p = 0;
+                int index = 0;
                 std::string value;
                 while (funcToken) {
                     if (funcToken->str()==",") {
-                        if (++p==index)
+                        if (++index == argIndex)
                             break;
                         value = "";
                     } else
                         value += funcToken->str();
                     funcToken = funcToken->next();
                 }
-                if (p==index) {
+                if (index == argIndex) {
                     value = value.substr(1, value.length() - 2);
                     _functions[value].usedOtherFile = true;
                 }
@@ -167,31 +165,24 @@ void CheckUnusedFunctions::parseTokens(const Tokenizer &tokenizer, const char Fi
 
         const Token *funcname = nullptr;
 
-        if (tok->scope()->isExecutable() && Token::Match(tok->next(), "%var% (")) {
+        if (tok->scope()->isExecutable() && Token::Match(tok, "%var% (")) {
+            funcname = tok;
+        } else if (tok->scope()->isExecutable() && Token::Match(tok, "%var% <") && Token::simpleMatch(tok->linkAt(1), "> (")) {
+            funcname = tok;
+        } else if (Token::Match(tok, "[;{}.,()[=+-/|!?:]")) {
             funcname = tok->next();
-        }
-
-        else if (tok->scope()->isExecutable() && Token::Match(tok->next(), "%var% <") && Token::simpleMatch(tok->linkAt(2), "> (")) {
-            funcname = tok->next();
-        }
-
-        else if (Token::Match(tok, "[;{}.,()[=+-/|!?:] &| %var% [(),;:}]")) {
-            funcname = tok->next();
-            if (tok->str() == "&")
+            if (funcname && funcname->str() == "&")
                 funcname = funcname->next();
-        }
-
-        else if (Token::Match(tok, "[;{}.,()[=+-/|!?:] &| %var% :: %var%")) {
-            funcname = tok->next();
-            if (funcname->str() == "&")
+            if (funcname && funcname->str() == "::")
                 funcname = funcname->next();
-            while (Token::Match(funcname,"%var% :: %var%"))
+            while (Token::Match(funcname, "%var% :: %var%"))
                 funcname = funcname->tokAt(2);
-            if (!Token::Match(funcname, "%var% [(),;:}]"))
+
+            if (!Token::Match(funcname, "%var% [(),;]:}]"))
                 continue;
         }
 
-        else
+        if (!funcname)
             continue;
 
         // funcname ( => Assert that the end parentheses isn't followed by {
@@ -264,4 +255,18 @@ void CheckUnusedFunctions::unusedFunctionError(ErrorLogger * const errorLogger,
         errorLogger->reportErr(errmsg);
     else
         reportError(errmsg);
+}
+
+Check::FileInfo *CheckUnusedFunctions::getFileInfo(const Tokenizer *tokenizer, const Settings *settings) const
+{
+    if (settings->isEnabled("unusedFunction") && settings->_jobs == 1)
+        instance.parseTokens(*tokenizer, tokenizer->list.getFiles().front().c_str(), settings);
+    return nullptr;
+
+}
+
+void CheckUnusedFunctions::analyseWholeProgram(const std::list<Check::FileInfo*> &fileInfo, ErrorLogger &errorLogger)
+{
+    (void)fileInfo;
+    instance.check(&errorLogger);
 }

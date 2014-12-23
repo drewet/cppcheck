@@ -63,6 +63,9 @@ public:
     /** @brief Is --debug-fp given? */
     bool debugFalsePositive;
 
+    /** @brief Is --dump given? */
+    bool dump;
+
     /** @brief Is --exception-handling given */
     bool exceptionHandling;
 
@@ -161,6 +164,13 @@ public:
      * @return error message. empty upon success
      */
     std::string addEnabled(const std::string &str);
+
+    /**
+     * @brief Disables all severities, except from error.
+     */
+    void clearEnabled() {
+        _enabled.clear();
+    }
 
     enum Language {
         None, C, CPP

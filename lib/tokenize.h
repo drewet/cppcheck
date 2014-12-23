@@ -48,14 +48,15 @@ public:
         m_timerResults = tr;
     }
 
-    /** @return the source file path. e.g. "file.cpp" */
-    const std::string& getSourceFilePath() const;
-
     /** Is the code C. Used for bailouts */
-    bool isC() const;
+    bool isC() const {
+        return list.isC();
+    }
 
     /** Is the code CPP. Used for bailouts */
-    bool isCPP() const;
+    bool isCPP() const {
+        return list.isCPP();
+    }
 
     /**
      * Check if inner scope ends with a call to a noreturn function
@@ -84,12 +85,13 @@ public:
      *
      * @param FileName The filename
      * @param configuration E.g. "A" for code where "#ifdef A" is true
+     * @param noSymbolDB_AST Disable creation of SymbolDatabase and AST
      * @return false if source code contains syntax errors
      */
     bool tokenize(std::istream &code,
                   const char FileName[],
-                  const std::string &configuration = "");
-
+                  const std::string &configuration = emptyString,
+                  bool noSymbolDB_AST = false);
     /**
      * tokenize condition and run simple simplifications on it
      * @param code code
@@ -257,6 +259,14 @@ public:
     void simplifyCompoundAssignment();
 
     /**
+     * Simplify the location of "static" and "const" qualifiers in
+     * a variable declaration or definition.
+     * Example: "int static const a;" => "static const a;"
+     * Example: "long long const static b;" => "static const long long b;"
+     */
+    void simplifyStaticConst();
+
+    /**
      * Simplify assignments in "if" and "while" conditions
      * Example: "if(a=b);" => "a=b;if(a);"
      * Example: "while(a=b) { f(a); }" => "a = b; while(a){ f(a); a = b; }"
@@ -384,11 +394,6 @@ public:
     /** Simplify "if else" */
     void elseif();
 
-    /**
-     * Simplify the operator "?:"
-     */
-    void simplifyConditionOperator();
-
     /** Simplify conditions
      * @return true if something is modified
      *         false if nothing is done.
@@ -494,9 +499,8 @@ public:
 
     /**
      * Simplify e.g. 'atol("0")' into '0'
-     * @return true if simplifcations performed and false otherwise.
      */
-    bool simplifyMathFunctions();
+    void simplifyMathFunctions();
 
     /**
      * Simplify e.g. 'sin(0)' into '0'
@@ -580,7 +584,7 @@ public:
 
     /**
      * assert that tokens are ok - used during debugging for example
-     * to catch problems in simplifyTokenList.
+     * to catch problems in simplifyTokenList1/2.
      */
     void validate() const;
 
@@ -714,6 +718,8 @@ public:
 
     void printDebugOutput() const;
 
+    void dump(std::ostream &out) const;
+
     Token *deleteInvalidTypedef(Token *typeDef);
 
     /**
@@ -756,22 +762,22 @@ public:
     static Token *copyTokens(Token *dest, const Token *first, const Token *last, bool one_line = true);
 
     /**
-    * Helper function to check wether number is zero (0 or 0.0 or 0E+0) or not?
-    * @param s --> a string to check
+    * Helper function to check whether number is zero (0 or 0.0 or 0E+0) or not?
+    * @param s the string to check
     * @return true in case is is zero and false otherwise.
     */
     static bool isZeroNumber(const std::string &s);
 
     /**
-    * Helper function to check wether number is one (1 or 0.1E+1 or 1E+0) or not?
-    * @param s --> a string to check
+    * Helper function to check whether number is one (1 or 0.1E+1 or 1E+0) or not?
+    * @param s the string to check
     * @return true in case is is one and false otherwise.
     */
     static bool isOneNumber(const std::string &s);
 
     /**
-    * Helper function to check wether number is one (2 or 0.2E+1 or 2E+0) or not?
-    * @param s --> a string to check
+    * Helper function to check whether number is two (2 or 0.2E+1 or 2E+0) or not?
+    * @param s the string to check
     * @return true in case is is two and false otherwise.
     */
     static bool isTwoNumber(const std::string &s);
@@ -795,6 +801,9 @@ private:
     static Token * startOfExecutableScope(Token * tok) {
         return const_cast<Token*>(startOfExecutableScope(const_cast<const Token *>(tok)));
     }
+
+    /** Set pod types */
+    void setPodTypes();
 
     /** settings */
     const Settings * _settings;

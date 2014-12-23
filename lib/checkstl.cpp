@@ -308,14 +308,14 @@ void CheckStl::stlOutOfBounds()
     for (std::list<Scope>::const_iterator i = symbolDatabase->scopeList.begin(); i != symbolDatabase->scopeList.end(); ++i) {
         const Token* tok = i->classDef;
         // only interested in conditions
-        if ((i->type != Scope::eFor && i->type != Scope::eWhile && i->type != Scope::eIf && i->type != Scope::eElseIf) || !tok)
+        if ((i->type != Scope::eFor && i->type != Scope::eWhile && i->type != Scope::eIf && i->type != Scope::eDo) || !tok)
             continue;
 
-        if (i->type == Scope::eElseIf)
-            tok = tok->tokAt(2);
-        else if (i->type == Scope::eFor)
+        if (i->type == Scope::eFor)
             tok = Token::findsimplematch(tok->tokAt(2), ";");
-        else
+        else if (i->type == Scope::eDo) {
+            tok = tok->linkAt(1)->tokAt(2);
+        } else
             tok = tok->next();
 
         // check if the for loop condition is wrong
@@ -333,7 +333,7 @@ void CheckStl::stlOutOfBounds()
             // variable id for the container variable
             const unsigned int declarationId = container->declarationId();
 
-            for (const Token *tok3 = tok->tokAt(8); tok3 && tok3 != i->classEnd; tok3 = tok3->next()) {
+            for (const Token *tok3 = i->classStart; tok3 && tok3 != i->classEnd; tok3 = tok3->next()) {
                 if (tok3->varId() == declarationId) {
                     if (Token::Match(tok3->next(), ". size|length ( )"))
                         break;
@@ -416,9 +416,6 @@ private:
         const EraseCheckLoop *c = static_cast<const EraseCheckLoop *>(e);
         return (eraseToken == c->eraseToken);
     }
-
-    /** @brief no implementation => compiler error if used by accident */
-    void operator=(const EraseCheckLoop &);
 
     /** @brief parse tokens */
     const Token *parse(const Token &tok, std::list<ExecutionPath *> &checks) const {
@@ -503,8 +500,10 @@ void CheckStl::erase()
 
     for (std::list<Scope>::const_iterator i = symbolDatabase->scopeList.begin(); i != symbolDatabase->scopeList.end(); ++i) {
         const Token* const tok = i->classDef;
+        if (!tok)
+            continue;
 
-        if (tok && i->type == Scope::eFor) {
+        if (i->type == Scope::eFor) {
             for (const Token *tok2 = tok->tokAt(2); tok2; tok2 = tok2->next()) {
                 if (tok2->str() == ";") {
                     if (Token::Match(tok2, "; %var% !=")) {
@@ -513,12 +512,8 @@ void CheckStl::erase()
                         const Token *decltok = variableInfo ? variableInfo->typeEndToken() : nullptr;
 
                         // Is variable an iterator?
-                        bool isIterator = false;
-                        if (decltok && Token::Match(decltok->tokAt(-2), "> :: iterator %varid%", tok2->next()->varId()))
-                            isIterator = true;
-
                         // If tok2->next() is an iterator, check scope
-                        if (isIterator)
+                        if (decltok && Token::Match(decltok->tokAt(-2), "> :: iterator %varid%", tok2->next()->varId()))
                             EraseCheckLoop::checkScope(this, tok2->next());
                     }
                     break;
@@ -553,11 +548,12 @@ void CheckStl::pushback()
             if (Token::Match(tok, "%var% = & %var% [")) {
                 // Variable id for pointer
                 const unsigned int pointerId(tok->varId());
+                if (pointerId == 0)
+                    continue;
 
                 // Variable id for the container variable
                 const unsigned int containerId(tok->tokAt(3)->varId());
-
-                if (pointerId == 0 || containerId == 0)
+                if (containerId == 0)
                     continue;
 
                 bool invalidPointer = false;
@@ -707,12 +703,11 @@ void CheckStl::stlBoundaries()
         const Scope * scope = symbolDatabase->functionScopes[i];
         for (const Token* tok = scope->classStart->next(); tok != scope->classEnd; tok = tok->next()) {
             // Declaring iterator..
-            if (tok->str() == "<" && Token::Match(tok->previous(), "bitset|deque|list|forward_list|map|multimap|multiset|priority_queue|queue|set|stack|hash_map|hash_multimap|hash_set|unordered_map|unordered_multimap|unordered_set|unordered_multiset")) {
-                const std::string& container_name(tok->strAt(-1));
-                if (tok->link())
-                    tok = tok->link();
-                else
+            if (tok->str() == "<" && Token::Match(tok->previous(), "bitset|list|forward_list|map|multimap|multiset|priority_queue|queue|set|stack|hash_map|hash_multimap|hash_set|unordered_map|unordered_multimap|unordered_set|unordered_multiset")) {
+                if (!tok->link())
                     continue;
+                const std::string& container_name(tok->strAt(-1));
+                tok = tok->link();
 
                 if (Token::Match(tok, "> :: iterator|const_iterator %var% =|;")) {
                     const unsigned int iteratorid(tok->tokAt(3)->varId());
@@ -759,24 +754,26 @@ static bool if_findCompare(const Token * const tokBack, bool str)
 
     if (Token::Match(tok,",|==|!="))
         return true;
-    if (str && tok->isComparisonOp())
-        return true;
-    if (tok->isArithmeticalOp()) // result is used in some calculation
-        return true;  // TODO: check if there is a comparison of the result somewhere
+    if (tok) {
+        if (str && tok->isComparisonOp())
+            return true;
+        if (tok->isArithmeticalOp()) // result is used in some calculation
+            return true;  // TODO: check if there is a comparison of the result somewhere
+    }
     return false;
 }
 
 void CheckStl::if_find()
 {
-    bool warning = _settings->isEnabled("warning");
-    bool performance = _settings->isEnabled("performance");
+    const bool warning = _settings->isEnabled("warning");
+    const bool performance = _settings->isEnabled("performance");
     if (!warning && !performance)
         return;
 
     const SymbolDatabase *symbolDatabase = _tokenizer->getSymbolDatabase();
 
     for (std::list<Scope>::const_iterator i = symbolDatabase->scopeList.begin(); i != symbolDatabase->scopeList.end(); ++i) {
-        if ((i->type != Scope::eIf && i->type != Scope::eElseIf && i->type != Scope::eWhile) || !i->classDef)
+        if ((i->type != Scope::eIf && i->type != Scope::eWhile) || !i->classDef)
             continue;
 
         const Token* tok = i->classDef->next();
@@ -798,18 +795,17 @@ void CheckStl::if_find()
             if (Token::Match(tok, "%var% . find (")) {
                 const Variable *var = tok->variable();
                 if (var) {
+                    const bool isString = var->isStlStringType() && !var->isArrayOrPointer();
+                    if (if_findCompare(tok->linkAt(3), isString))
+                        continue;
+
                     // Is the variable a std::string or STL container?
                     const Token * decl = var->typeStartToken();
                     const unsigned int varid = tok->varId();
-
-                    bool str = Token::Match(decl, "std :: string|wstring &| %varid%", varid);
-                    if (if_findCompare(tok->linkAt(3), str))
-                        continue;
-
                     // stl container
-                    if (Token::Match(decl, "std :: %var% < %type% > &| %varid%", varid) && warning)
+                    if (warning && Token::Match(decl, "std :: %var% < %type% > &| %varid%", varid))
                         if_findError(tok, false);
-                    else if (str && performance)
+                    else if (performance && isString)
                         if_findError(tok, true);
                 }
             }
@@ -831,46 +827,46 @@ void CheckStl::if_find()
 
                 const Variable *var = tok->variable();
                 if (var) {
-                    // Is the variable a std::string or STL container?
-                    const Token * decl = var->typeStartToken();
-                    const unsigned int varid = tok->varId();
-
                     //pretty bad limitation.. but it is there in order to avoid
                     //own implementations of 'find' or any container
                     if (!var->isStlType())
                         continue;
+
+                    // Is the variable a std::string or STL container?
+                    const Token * decl = var->typeStartToken();
+                    const unsigned int varid = tok->varId();
 
                     decl = decl->tokAt(2);
 
                     if (Token::Match(decl, "%var% <")) {
                         decl = decl->tokAt(2);
                         //stl-like
-                        if (Token::Match(decl, "std :: %var% < %type% > > &| %varid%", varid) && warning)
+                        if (warning && Token::Match(decl, "std :: %var% < %type% > > &| %varid%", varid))
                             if_findError(tok, false);
                         //not stl-like, then let's hope it's a pointer or an array
                         else if (Token::Match(decl, "%type% >")) {
                             decl = decl->tokAt(2);
-                            if ((Token::Match(decl, "* &| %varid%", varid) ||
-                                 Token::Match(decl, "&| %varid% [ ]| %any% ]| ", varid)) && warning)
+                            if (warning && (Token::Match(decl, "* &| %varid%", varid) ||
+                                            Token::Match(decl, "&| %varid% [ ]| %any% ]| ", varid)))
                                 if_findError(tok, false);
                         }
 
-                        else if (Token::Match(decl, "std :: string|wstring > &| %varid%", varid) && performance)
+                        else if (performance && Token::Match(decl, "std :: string|wstring > &| %varid%", varid))
                             if_findError(tok, true);
                     }
 
-                    else if (decl && decl->str() == "string") {
+                    else if (performance && var->isStlStringType()) {
                         decl = decl->next();
-                        if ((Token::Match(decl, "* &| %varid%", varid) ||
-                             Token::Match(decl, "&| %varid% [ ]| %any% ]| ", varid)) && performance)
+                        if (Token::Match(decl, "* &| %varid%", varid) ||
+                            Token::Match(decl, "&| %varid% [ ]| %any% ]| ", varid))
                             if_findError(tok, true);
                     }
                 }
             }
 
-            else if (Token::Match(tok, "std :: find|find_if (")) {
+            else if (warning && Token::Match(tok, "std :: find|find_if (")) {
                 // check that result is checked properly
-                if (!if_findCompare(tok->linkAt(3), false) && warning) {
+                if (!if_findCompare(tok->linkAt(3), false)) {
                     if_findError(tok, false);
                 }
             }
@@ -976,13 +972,10 @@ void CheckStl::redundantCondition()
     const SymbolDatabase *symbolDatabase = _tokenizer->getSymbolDatabase();
 
     for (std::list<Scope>::const_iterator i = symbolDatabase->scopeList.begin(); i != symbolDatabase->scopeList.end(); ++i) {
-        if (i->type != Scope::eIf && i->type != Scope::eElseIf)
+        if (i->type != Scope::eIf)
             continue;
 
         const Token* tok = i->classDef->tokAt(2);
-        if (i->type == Scope::eElseIf)
-            tok = tok->next();
-
         if (!Token::Match(tok, "%var% . find ( %any% ) != %var% . end|rend|cend|crend ( ) ) { %var% . remove|erase ( %any% ) ;"))
             continue;
 
@@ -1101,6 +1094,7 @@ static bool isLocal(const Token *tok)
 
 void CheckStl::string_c_str()
 {
+    const bool performance = _settings->isEnabled("performance");
     // THIS ARRAY MUST BE ORDERED ALPHABETICALLY
     static const char* const stl_string[] = {
         "string", "u16string", "u32string", "wstring"
@@ -1114,7 +1108,7 @@ void CheckStl::string_c_str()
 
     // Find all functions that take std::string as argument
     std::multimap<std::string, unsigned int> c_strFuncParam;
-    if (_settings->isEnabled("performance")) {
+    if (performance) {
         for (std::list<Scope>::const_iterator scope = symbolDatabase->scopeList.begin(); scope != symbolDatabase->scopeList.end(); ++scope) {
             for (std::list<Function>::const_iterator func = scope->functionList.begin(); func != scope->functionList.end(); ++func) {
                 if (c_strFuncParam.erase(func->tokenDef->str()) != 0) { // Check if function with this name was already found
@@ -1162,8 +1156,8 @@ void CheckStl::string_c_str()
                 const Variable* var = tok->next()->variable();
                 if (var && var->isPointer())
                     string_c_strError(tok);
-            } else if (Token::Match(tok, "%var% ( !!)") && c_strFuncParam.find(tok->str()) != c_strFuncParam.end() &&
-                       _settings->isEnabled("performance") && !Token::Match(tok->previous(), "::|.") && tok->varId() == 0 && tok->str() != scope->className) { // calling function. TODO: Add support for member functions
+            } else if (performance && Token::Match(tok, "%var% ( !!)") && c_strFuncParam.find(tok->str()) != c_strFuncParam.end() &&
+                       !Token::Match(tok->previous(), "::|.") && tok->varId() == 0 && tok->str() != scope->className) { // calling function. TODO: Add support for member functions
                 std::pair<std::multimap<std::string, unsigned int>::const_iterator, std::multimap<std::string, unsigned int>::const_iterator> range = c_strFuncParam.equal_range(tok->str());
                 for (std::multimap<std::string, unsigned int>::const_iterator i = range.first; i != range.second; ++i) {
                     if (i->second == 0)
@@ -1231,7 +1225,7 @@ void CheckStl::string_c_str()
                 }
             }
             // Using c_str() to get the return value is redundant if the function returns std::string or const std::string&.
-            else if ((returnType == stdString || returnType == stdStringConstRef) && _settings->isEnabled("performance")) {
+            else if (performance && (returnType == stdString || returnType == stdStringConstRef)) {
                 if (tok->str() == "return") {
                     const Token* tok2 = Token::findsimplematch(tok->next(), ";");
                     if (Token::Match(tok2->tokAt(-4), ". c_str|data ( )")) {
@@ -1383,8 +1377,8 @@ void CheckStl::uselessCalls()
         "unordered_set", "vector", "wstring"
     };
 
-    bool performance = _settings->isEnabled("performance");
-    bool warning = _settings->isEnabled("warning");
+    const bool performance = _settings->isEnabled("performance");
+    const bool warning = _settings->isEnabled("warning");
     if (!performance && !warning)
         return;
 
@@ -1393,13 +1387,13 @@ void CheckStl::uselessCalls()
     for (std::size_t i = 0; i < functions; ++i) {
         const Scope * scope = symbolDatabase->functionScopes[i];
         for (const Token* tok = scope->classStart; tok != scope->classEnd; tok = tok->next()) {
-            if (tok->varId() && Token::Match(tok, "%var% . compare|find|rfind|find_first_not_of|find_first_of|find_last_not_of|find_last_of ( %var% [,)]") &&
-                tok->varId() == tok->tokAt(4)->varId() && warning) {
+            if (warning && tok->varId() && Token::Match(tok, "%var% . compare|find|rfind|find_first_not_of|find_first_of|find_last_not_of|find_last_of ( %var% [,)]") &&
+                tok->varId() == tok->tokAt(4)->varId()) {
                 uselessCallsReturnValueError(tok->tokAt(4), tok->str(), tok->strAt(2));
-            } else if (tok->varId() && Token::Match(tok, "%var% . swap ( %var% )") &&
-                       tok->varId() == tok->tokAt(4)->varId() && performance) {
+            } else if (performance && tok->varId() && Token::Match(tok, "%var% . swap ( %var% )") &&
+                       tok->varId() == tok->tokAt(4)->varId()) {
                 uselessCallsSwapError(tok, tok->str());
-            } else if (Token::Match(tok, "%var% . substr (") && performance &&
+            } else if (performance && Token::Match(tok, "%var% . substr (") &&
                        tok->variable() && tok->variable()->isStlType(stl_string)) {
                 if (Token::Match(tok->tokAt(4), "0| )"))
                     uselessCallsSubstrError(tok, false);
@@ -1408,7 +1402,7 @@ void CheckStl::uselessCalls()
                         uselessCallsSubstrError(tok, false);
                 } else if (Token::simpleMatch(tok->linkAt(3)->tokAt(-2), ", 0 )"))
                     uselessCallsSubstrError(tok, true);
-            } else if (Token::Match(tok, "[{};] %var% . empty ( ) ;") && warning &&
+            } else if (warning && Token::Match(tok, "[{};] %var% . empty ( ) ;") &&
                        tok->next()->variable() && tok->next()->variable()->isStlType(stl_containers_with_empty_and_clear))
                 uselessCallsEmptyError(tok->next());
             else if (Token::Match(tok, "[{};] std :: remove|remove_if|unique (") && tok->tokAt(5)->nextArgument())
@@ -1470,13 +1464,11 @@ void CheckStl::checkDereferenceInvalidIterator()
     // be an iterator that is dereferenced before being checked for validity.
     const std::list<Scope>& scopeList = _tokenizer->getSymbolDatabase()->scopeList;
     for (std::list<Scope>::const_iterator i = scopeList.begin(); i != scopeList.end(); ++i) {
-        if (i->type == Scope::eIf || i->type == Scope::eElseIf || i->type == Scope::eDo || i->type == Scope::eWhile || i->type == Scope::eFor) {
+        if (i->type == Scope::eIf || i->type == Scope::eDo || i->type == Scope::eWhile || i->type == Scope::eFor) {
 
             const Token* const tok = i->classDef;
             const Token* startOfCondition = tok->next();
-            if (i->type == Scope::eElseIf)
-                startOfCondition = startOfCondition->next();
-            else if (i->type == Scope::eDo)
+            if (i->type == Scope::eDo)
                 startOfCondition = startOfCondition->link()->tokAt(2);
             const Token* endOfCondition = startOfCondition->link();
             if (!endOfCondition)
@@ -1556,10 +1548,14 @@ void CheckStl::readingEmptyStlContainer()
         if (i->type != Scope::eFunction)
             continue;
 
+        const Token* restartTok = nullptr;
         for (const Token *tok = i->classStart->next(); tok != i->classEnd; tok = tok->next()) {
-            if (Token::Match(tok, "for|while|do|}")) { // Loops and end of scope clear the sets.
+            if (Token::Match(tok, "for|while")) { // Loops and end of scope clear the sets.
+                restartTok = tok->linkAt(1); // Check condition to catch looping over empty containers
+            } else if (tok == restartTok || Token::Match(tok, "do|}")) {
                 empty_map.clear();
                 empty_nonmap.clear();
+                restartTok = nullptr;
             }
 
             if (!tok->varId())
@@ -1569,7 +1565,7 @@ void CheckStl::readingEmptyStlContainer()
             const Variable* var = tok->variable();
             if (var) {
                 bool insert = false;
-                if (tok->variable()->nameToken() == tok && var->isLocal() && !var->isStatic()) { // Local variable declared
+                if (var->nameToken() == tok && var->isLocal() && !var->isStatic()) { // Local variable declared
                     insert = !Token::Match(tok->tokAt(1), "[(=]"); // Only if not initialized
                 } else if (Token::Match(tok, "%var% . clear ( ) ;")) {
                     insert = true;
@@ -1584,7 +1580,7 @@ void CheckStl::readingEmptyStlContainer()
                 }
             }
 
-            bool map = empty_map.find(tok->varId()) != empty_map.end();
+            const bool map = empty_map.find(tok->varId()) != empty_map.end();
             if (!map && empty_nonmap.find(tok->varId()) == empty_nonmap.end())
                 continue;
 

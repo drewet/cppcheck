@@ -61,6 +61,7 @@ private:
         TEST_CASE(test5);
         TEST_CASE(test6);
         TEST_CASE(test_numeric);
+        TEST_CASE(void0); // #6327: No fp for statement "(void)0;"
         TEST_CASE(intarray);
         TEST_CASE(structarraynull);
         TEST_CASE(structarray);
@@ -150,6 +151,11 @@ private:
         ASSERT_EQUALS("", errout.str());
     }
 
+    void void0() { // #6327
+        check("void f() { 0; }");
+        ASSERT_EQUALS("", errout.str());
+    }
+
     void intarray() {
         check("int arr[] = { 100/2, 1*100 };");
         ASSERT_EQUALS("", errout.str());
@@ -182,6 +188,14 @@ private:
         // #2462 - C++11 struct initialization
         check("void f() {\n"
               "    ABC abc{1,2,3};\n"
+              "}");
+        ASSERT_EQUALS("", errout.str());
+
+        // #6260 - C++11 array initialization
+        check("void foo() {\n"
+              "    static const char* a[][2] {\n"
+              "        {\"b\", \"\"},\n"
+              "    };\n"
               "}");
         ASSERT_EQUALS("", errout.str());
 

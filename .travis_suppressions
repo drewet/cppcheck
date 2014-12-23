@@ -1,8 +1,7 @@
-uselessAssignmentPtrArg:build/checkstl.cpp
-assertWithSideEffect:build/checkuninitvar.cpp
-duplicateBranch:build/checkunusedvar.cpp
 unusedPrivateFunction:test/testcmdlineparser.cpp
 redundantNextPrevious:test/testtoken.cpp
+uselessAssignmentPtrArg:build/checkstl.cpp
+variableScope:test/testtokenize.cpp
 *:gui/test*
 *:test/test.cxx
 

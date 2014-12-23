@@ -342,6 +342,8 @@ int main(int argc, char **argv)
                                 "-Wshadow "
 //                                "-Wsign-conversion "
                                 "-Wsign-promo "
+                                "-Wno-missing-field-initializers "
+                                "-Wno-missing-braces "
 //                                "-Wunreachable-code "
                                 "-Wno-sign-compare "  // danmar: I don't like this warning, it's very rarelly a bug
                                 "$(CPPCHK_GLIBCXX_DEBUG) "
@@ -413,8 +415,8 @@ int main(int argc, char **argv)
     fout << "\tinstall cppcheck ${BIN}\n";
     fout << "\tinstall htmlreport/cppcheck-htmlreport ${BIN}\n";
     fout << "ifdef CFGDIR \n";
-    fout << "\tinstall -d ${CFGDIR}\n";
-    fout << "\tinstall -m 644 cfg/* ${CFGDIR}\n";
+    fout << "\tinstall -d ${DESTDIR}${CFGDIR}\n";
+    fout << "\tinstall -m 644 cfg/* ${DESTDIR}${CFGDIR}\n";
     fout << "endif\n\n";
 
     fout << "\n###### Build\n\n";

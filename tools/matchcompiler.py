@@ -106,15 +106,14 @@ class MatchCompiler:
         elif tok == '%op%':
             return 'tok->isOp()'
         elif tok == '%or%':
-            return '(tok->str()==' + self._insertMatchStr('|') + ')/* | */'
+            return '(tok->type() == Token::eBitOp && tok->str()==' + self._insertMatchStr('|') + ')/* | */'
         elif tok == '%oror%':
-            return '(tok->str()==' + self._insertMatchStr('||') + ')/* || */'
+            return '(tok->type() == Token::eLogicalOp && tok->str()==' + self._insertMatchStr('||') + ')/* || */'
         elif tok == '%str%':
             return '(tok->type()==Token::eString)'
         elif tok == '%type%':
             return (
-                '(tok->isName() && tok->varId()==0U && (tok->str() != ' +
-                self._insertMatchStr('delete') + '/* delete */ || !Token::isCPP()))'
+                '(tok->isName() && tok->varId()==0U && !tok->isKeyword())'
             )
         elif tok == '%var%':
             return 'tok->isName()'
@@ -325,7 +324,7 @@ class MatchCompiler:
 #        ret += '            std::cout << "tok: " << tok->str();\n'
 #        ret += '        if (tok->next())\n'
 #        ret += '            std::cout << "tok next: " << tok->next()->str();\n'
-        ret += '        throw InternalError(tok, "Internal error. compiled match returned different result than parsed match");\n'
+        ret += '        throw InternalError(tok, "Internal error. compiled match returned different result than parsed match: ' + pattern + '");\n'
         ret += '    }\n'
         ret += '    return res_compiled_match;\n'
         ret += '}\n'
@@ -426,7 +425,7 @@ class MatchCompiler:
 
         origFindMatchName = 'findmatch'
         if is_findsimplematch:
-            origMatchName = 'findsimplematch'
+            origFindMatchName = 'findsimplematch'
             assert(varId is None)
 
         ret += '    T * res_compiled_findmatch = findmatch' + \
@@ -449,7 +448,7 @@ class MatchCompiler:
         # Don't use assert() here, it's disabled for optimized builds.
         # We also need to verify builds in 'release' mode
         ret += '    if (res_parsed_findmatch != res_compiled_findmatch) {\n'
-        ret += '        throw InternalError(tok, "Internal error. compiled findmatch returned different result than parsed findmatch");\n'
+        ret += '        throw InternalError(tok, "Internal error. compiled findmatch returned different result than parsed findmatch: ' + pattern + '");\n'
         ret += '    }\n'
         ret += '    return res_compiled_findmatch;\n'
         ret += '}\n'

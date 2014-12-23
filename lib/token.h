@@ -58,7 +58,7 @@ private:
 
 public:
     enum Type {
-        eVariable, eType, eFunction, eName, // Names: Variable (varId), Type (typeId, later), Function (FuncId, later), Name (unknown identifier)
+        eVariable, eType, eFunction, eKeyword, eName, // Names: Variable (varId), Type (typeId, later), Function (FuncId, later), Language keyword, Name (unknown identifier)
         eNumber, eString, eChar, eBoolean, eLiteral, // Literals: Number, String, Character, User defined literal (C++11)
         eArithmeticalOp, eComparisonOp, eAssignmentOp, eLogicalOp, eBitOp, eIncDecOp, eExtendedOp, // Operators: Arithmetical, Comparison, Assignment, Logical, Bitwise, ++/--, Extended
         eBracket, // {, }, <, >: < and > only if link() is set. Otherwise they are comparison operators.
@@ -113,7 +113,7 @@ public:
 
     /**
      * @return String of the token in given index, related to this token.
-     * If that token does not exist, an emptry string is being returned.
+     * If that token does not exist, an empty string is being returned.
      */
     const std::string &strAt(int index) const;
 
@@ -198,6 +198,15 @@ public:
     static std::size_t getStrLength(const Token *tok);
 
     /**
+     * @return sizeof of C-string.
+     *
+     * Should be called for %%str%% tokens only.
+     *
+     * @param tok token with C-string
+     **/
+    static std::size_t getStrSize(const Token *tok);
+
+    /**
      * @return char of C-string at index (possible escaped "\\n")
      *
      * Should be called for %%str%% tokens only.
@@ -213,8 +222,17 @@ public:
     void type(Type t) {
         _type = t;
     }
+    void isKeyword(bool kwd) {
+        if (kwd)
+            _type = eKeyword;
+        else if (_type == eKeyword)
+            _type = eName;
+    }
+    bool isKeyword() const {
+        return _type == eKeyword;
+    }
     bool isName() const {
-        return _type == eName || _type == eType || _type == eVariable || _type == eFunction ||
+        return _type == eName || _type == eType || _type == eVariable || _type == eFunction || _type == eKeyword ||
                _type == eBoolean; // TODO: "true"/"false" aren't really a name...
     }
     bool isUpperCaseName() const;
@@ -313,6 +331,12 @@ public:
     void isAttributeUnused(bool unused) {
         setFlag(fIsAttributeUnused, unused);
     }
+    bool isAttributeUsed() const {
+        return getFlag(fIsAttributeUsed);
+    }
+    void isAttributeUsed(bool unused) {
+        setFlag(fIsAttributeUsed, unused);
+    }
     bool isAttributePure() const {
         return getFlag(fIsAttributePure);
     }
@@ -362,14 +386,14 @@ public:
      * string, return value is 0. If needle was not found, return
      * value is -1.
      *
-     * @param tok Current token
+     * @param needle Current token
      * @param haystack e.g. "one|two" or "|one|two"
-     * @param needle e.g. "one", "two" or "invalid"
+     * @param varid optional varid of token
      * @return 1 if needle is found from the haystack
      *         0 if needle was empty string
      *        -1 if needle was not found
      */
-    static int multiCompare(const Token *tok, const char *haystack, const char *needle);
+    static int multiCompare(const Token *needle, const char *haystack, unsigned int varid);
 
     unsigned int linenr() const {
         return _linenr;
@@ -458,8 +482,9 @@ public:
      * @param os The result is shifted into that output stream
      * @param varid Print varids. (Style: "varname@id")
      * @param attributes Print attributes of tokens like "unsigned" in front of it.
+     * @param macro Prints $ in front of the token if it was expanded from a macro.
      */
-    void stringify(std::ostream& os, bool varid, bool attributes) const;
+    void stringify(std::ostream& os, bool varid, bool attributes, bool macro) const;
 
     /**
      * Stringify a list of token, from current instance on.
@@ -595,9 +620,17 @@ public:
 
     /**
      * @return the first token of the next argument. Does only work on argument
-     * lists. Returns 0, if there is no next argument
+     * lists. Requires that Tokenizer::createLinks2() has been called before.
+     * Returns 0, if there is no next argument.
      */
     Token* nextArgument() const;
+
+    /**
+     * @return the first token of the next argument. Does only work on argument
+     * lists. Should be used only before Tokenizer::createLinks2() was called.
+     * Returns 0, if there is no next argument.
+     */
+    Token* nextArgumentBeforeCreateLinks2() const;
 
     /**
      * Returns the closing bracket of opening '<'. Should only be used if link()
@@ -611,7 +644,7 @@ public:
      * @return the original name.
      */
     const std::string & originalName() const {
-        return _originalName;
+        return _originalName ? *_originalName : emptyString;
     }
 
     /**
@@ -619,7 +652,10 @@ public:
      */
     template<typename T>
     void originalName(T&& name) {
-        _originalName = name;
+        if (!_originalName)
+            _originalName = new std::string(name);
+        else
+            *_originalName = name;
     }
 
     /** Values of token */
@@ -628,7 +664,7 @@ public:
     const ValueFlow::Value * getValue(const MathLib::bigint val) const {
         std::list<ValueFlow::Value>::const_iterator it;
         for (it = values.begin(); it != values.end(); ++it) {
-            if (it->intvalue == val)
+            if (it->intvalue == val && !it->tokvalue)
                 return &(*it);
         }
         return NULL;
@@ -638,6 +674,8 @@ public:
         const ValueFlow::Value *ret = nullptr;
         std::list<ValueFlow::Value>::const_iterator it;
         for (it = values.begin(); it != values.end(); ++it) {
+            if (it->tokvalue)
+                continue;
             if ((!ret || it->intvalue > ret->intvalue) &&
                 ((it->condition != NULL) == condition))
                 ret = &(*it);
@@ -647,6 +685,11 @@ public:
 
     const ValueFlow::Value * getValueLE(const MathLib::bigint val, const Settings *settings) const;
     const ValueFlow::Value * getValueGE(const MathLib::bigint val, const Settings *settings) const;
+
+    const Token *getValueTokenMaxStrLength() const;
+    const Token *getValueTokenMinStrSize() const;
+
+    const Token *getValueTokenDeadPointer() const;
 
 private:
 
@@ -678,6 +721,7 @@ private:
      */
     static int firstWordLen(const char *str);
 
+    std::string _str;
 
     Token *_next;
     Token *_previous;
@@ -690,7 +734,6 @@ private:
         const Variable *_variable;
     };
 
-    std::string _str;
     unsigned int _varId;
     unsigned int _fileIndex;
     unsigned int _linenr;
@@ -716,7 +759,8 @@ private:
         fIsAttributePure        = (1 << 9),  // __attribute__((pure))
         fIsAttributeConst       = (1 << 10), // __attribute__((const))
         fIsAttributeNothrow     = (1 << 11), // __attribute__((nothrow))
-        fIsDeclspecNothrow      = (1 << 12)  // __declspec(nothrow)
+        fIsDeclspecNothrow      = (1 << 12), // __declspec(nothrow)
+        fIsAttributeUsed        = (1 << 13)  // __attribute__((used))
     };
 
     unsigned int _flags;
@@ -752,9 +796,7 @@ private:
     Token *_astParent;
 
     // original name like size_t
-    std::string _originalName;
-
-    static bool _isCPP;
+    std::string* _originalName;
 
 public:
     void astOperand1(Token *tok);
@@ -802,15 +844,9 @@ public:
 
     std::string expressionString() const;
 
-    void printAst(bool verbose) const;
+    void printAst(bool verbose, bool xml, std::ostream &out) const;
 
-    void printValueFlow() const;
-    static void isCPP(bool isCPP) {
-        _isCPP = isCPP;
-    }
-    static bool isCPP() {
-        return _isCPP;
-    }
+    void printValueFlow(bool xml, std::ostream &out) const;
 };
 
 /// @}

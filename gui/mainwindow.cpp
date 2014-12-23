@@ -183,12 +183,12 @@ MainWindow::MainWindow(TranslationHandler* th, QSettings* settings) :
     // For other platforms default to unspecified/default which means the
     // platform Cppcheck GUI was compiled on.
 #if defined(_WIN32)
-    Platform &plat = mPlatforms.get(Settings::Win32A);
+    const Settings::PlatformType defaultPlat = Settings::Win32W;
 #else
-    Platform &plat = mPlatforms.get(Settings::Unspecified);
+    const Settings::PlatformType defaultPlat = Settings::Unspecified;
 #endif
+    Platform &plat = mPlatforms.get((Settings::PlatformType)mSettings->value(SETTINGS_CHECKED_PLATFORM, defaultPlat).toInt());
     plat.mActMainWindow->setChecked(true);
-    mSettings->setValue(SETTINGS_CHECKED_PLATFORM, plat.mType);
 }
 
 MainWindow::~MainWindow()
@@ -593,6 +593,9 @@ Settings MainWindow::GetCppcheckSettings()
                 case Library::ErrorCode::BAD_ATTRIBUTE_VALUE:
                     errmsg = tr("Bad attribute value");
                     break;
+                case Library::ErrorCode::UNSUPPORTED_FORMAT:
+                    errmsg = tr("Unsupported format");
+                    break;
                 }
                 if (!error.reason.empty())
                     errmsg += " '" + QString::fromStdString(error.reason) + "'";
@@ -643,9 +646,12 @@ Settings MainWindow::GetCppcheckSettings()
     bool posix = true;
     if (result.standards.posix)
         posix = (LoadLibrary(&result.library, "posix.cfg").errorcode == Library::ErrorCode::OK);
+    bool windows = true;
+    if (result.platformType == Settings::Win32A || result.platformType == Settings::Win32W || result.platformType == Settings::Win64)
+        windows = (LoadLibrary(&result.library, "windows.cfg").errorcode == Library::ErrorCode::OK);
 
-    if (!std || !posix)
-        QMessageBox::warning(this, tr("Error"), tr("Failed to load %1. Your Cppcheck installation is broken. You can use --data-dir=<directory> at the command line to specify where this file is located.").arg(!std ? "std.cfg" : "posix.cfg"));
+    if (!std || !posix || !windows)
+        QMessageBox::critical(this, tr("Error"), tr("Failed to load %1. Your Cppcheck installation is broken. You can use --data-dir=<directory> at the command line to specify where this file is located.").arg(!std ? "std.cfg" : !posix ? "posix.cfg" : "windows.cfg"));
 
     if (result._jobs <= 1) {
         result._jobs = 1;

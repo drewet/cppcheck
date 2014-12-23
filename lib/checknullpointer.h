@@ -82,12 +82,6 @@ public:
     /** @brief possible null pointer dereference */
     void nullPointer();
 
-    /**
-     * @brief Does one part of the check for nullPointer().
-     * Checking if pointer is NULL and then dereferencing it..
-     */
-    void nullPointerByCheckAndDeRef();
-
     /** @brief dereferencing null constant (after Tokenizer::simplifyKnownVariables) */
     void nullConstantDereference();
 
@@ -111,7 +105,7 @@ private:
     /** class info in WIKI format. Used by --doc */
     std::string classInfo() const {
         return "Null pointers\n"
-               "* null pointer dereferencing\n";
+               "- null pointer dereferencing\n";
     }
 
     /**
@@ -145,12 +139,6 @@ private:
      * @brief Removes any variable that may be assigned from pointerArgs.
      */
     static void removeAssignedVarFromSet(const Token* tok, std::set<unsigned int>& pointerArgs);
-
-    /**
-     * @brief Investigate if function call can make pointer null. If
-     * the pointer is passed by value it can't be made a null pointer.
-     */
-    static bool CanFunctionAssignPointer(const Token *functiontoken, unsigned int varid, bool& unknown);
 };
 /// @}
 //---------------------------------------------------------------------------

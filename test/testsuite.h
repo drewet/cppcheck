@@ -47,14 +47,17 @@ protected:
 
     virtual void run() = 0;
 
-    bool runTest(const char testname[]);
+    bool prepareTest(const char testname[]);
 
     void assert_(const char *filename, unsigned int linenr, bool condition) const;
     void todoAssert(const char *filename, unsigned int linenr, bool condition) const;
 
-    void assertEquals(const char *filename, unsigned int linenr, const std::string &expected, const std::string &actual, const std::string &msg = "") const;
-    void assertEquals(const char *filename, unsigned int linenr, long long expected, long long actual, const std::string &msg="") const;
-    void assertEqualsDouble(const char *filename, unsigned int linenr, double expected, double actual, const std::string &msg="") const;
+    void assertEquals(const char *filename, unsigned int linenr, const std::string &expected, const std::string &actual, const std::string &msg = emptyString) const;
+    void assertEquals(const char *filename, unsigned int linenr, const char expected[], const std::string& actual, const std::string &msg = emptyString) const;
+    void assertEquals(const char *filename, unsigned int linenr, const char expected[], const char actual[], const std::string &msg = emptyString) const;
+    void assertEquals(const char *filename, unsigned int linenr, const std::string& expected, const char actual[], const std::string &msg = emptyString) const;
+    void assertEquals(const char *filename, unsigned int linenr, long long expected, long long actual, const std::string &msg = emptyString) const;
+    void assertEqualsDouble(const char *filename, unsigned int linenr, double expected, double actual, const std::string &msg = emptyString) const;
 
     void todoAssertEquals(const char *filename, unsigned int linenr, const std::string &wanted,
                           const std::string &current, const std::string &actual) const;
@@ -62,12 +65,14 @@ protected:
                           long long current, long long actual) const;
     void assertThrowFail(const char *filename, unsigned int linenr) const;
     void complainMissingLib(const char* libname) const;
+
     void processOptions(const options& args);
 public:
     virtual void reportOut(const std::string &outmsg);
     virtual void reportErr(const ErrorLogger::ErrorMessage &msg);
     void run(const std::string &str);
     void warn(const char msg[]);
+    void warnUnsimplified(const std::string& unsimplified, const std::string& simplified);
 
     TestFixture(const std::string &_name);
     virtual ~TestFixture() { }
@@ -75,19 +80,19 @@ public:
     static std::size_t runTests(const options& args);
 };
 
-#define TEST_CASE( NAME )  if ( runTest(#NAME) ) { _lib = Library(); currentTest = classname + "::" + #NAME; if (quiet_tests) { REDIRECT; NAME(); } else { NAME ();} }
+#define TEST_CASE( NAME )  if ( prepareTest(#NAME) ) { NAME(); }
 #define ASSERT( CONDITION )  assert_(__FILE__, __LINE__, CONDITION)
 #define ASSERT_EQUALS( EXPECTED , ACTUAL )  assertEquals(__FILE__, __LINE__, EXPECTED, ACTUAL)
 #define ASSERT_EQUALS_DOUBLE( EXPECTED , ACTUAL )  assertEqualsDouble(__FILE__, __LINE__, EXPECTED, ACTUAL)
 #define ASSERT_EQUALS_MSG( EXPECTED , ACTUAL, MSG )  assertEquals(__FILE__, __LINE__, EXPECTED, ACTUAL, MSG)
-#define ASSERT_THROW( CMD, EXCEPTION ) try { CMD ; assertThrowFail(__FILE__, __LINE__); } catch (EXCEPTION &) { } catch (...) { assertThrowFail(__FILE__, __LINE__); }
+#define ASSERT_THROW( CMD, EXCEPTION ) try { CMD ; assertThrowFail(__FILE__, __LINE__); } catch (const EXCEPTION&) { } catch (...) { assertThrowFail(__FILE__, __LINE__); }
 #define TODO_ASSERT_EQUALS( WANTED , CURRENT , ACTUAL ) todoAssertEquals(__FILE__, __LINE__, WANTED, CURRENT, ACTUAL)
 #define REGISTER_TEST( CLASSNAME ) namespace { CLASSNAME instance; }
 
 #ifdef _WIN32
-#define LOAD_LIB_2( LIB, NAME ) { if (((LIB).load("./testrunner", "../cfg/" NAME).errorcode != Library::ErrorCode::OK) && ((LIB).load("./testrunner", "cfg/" NAME).errorcode != Library::ErrorCode::OK)) { complainMissingLib(NAME); return; } }
+#define LOAD_LIB_2( LIB, NAME ) { if (((LIB).load("./testrunner", "../cfg/" NAME).errorcode != Library::OK) && ((LIB).load("./testrunner", "cfg/" NAME).errorcode != Library::OK)) { complainMissingLib(NAME); return; } }
 #else
-#define LOAD_LIB_2( LIB, NAME ) { if ((LIB).load("./testrunner", "cfg/" NAME).errorcode != Library::ErrorCode::OK) { complainMissingLib(NAME); return; } }
+#define LOAD_LIB_2( LIB, NAME ) { if ((LIB).load("./testrunner", "cfg/" NAME).errorcode != Library::OK) { complainMissingLib(NAME); return; } }
 #endif
 #define LOAD_LIB( NAME ) { LOAD_LIB_2(_lib, NAME); }
 

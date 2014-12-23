@@ -114,7 +114,7 @@ void CheckLeakAutoVar::check()
         VarInfo varInfo;
 
         // Local variables that are known to be non-zero.
-        static const std::set<unsigned int> notzero;
+        const std::set<unsigned int> notzero;
 
         checkScope(scope->classStart, &varInfo, notzero);
 
@@ -220,9 +220,13 @@ void CheckLeakAutoVar::checkScope(const Token * const startToken,
 
             // not a local variable nor argument?
             const Variable *var = tok->variable();
-            if (var && !var->isArgument() && !var->isLocal()) {
+            if (var && !var->isArgument() && (!var->isLocal() || var->isStatic())) {
                 continue;
             }
+
+            // non-pod variable
+            if (_tokenizer->isCPP() && (!var || !var->typeStartToken()->isStandardType()))
+                continue;
 
             // Don't check reference variables
             if (var && var->isReference())
@@ -280,6 +284,10 @@ void CheckLeakAutoVar::checkScope(const Token * const startToken,
                     varInfo2.erase(tok->tokAt(2)->varId());
                 } else if (Token::Match(tok->next(), "( 0 < %var% )|&&")) {
                     varInfo2.erase(tok->tokAt(4)->varId());
+                } else if (Token::Match(tok->next(), "( %var% == -1 )|&&")) {
+                    varInfo1.erase(tok->tokAt(2)->varId());
+                } else if (Token::Match(tok->next(), "( -1 == %var% )|&&")) {
+                    varInfo1.erase(tok->tokAt(4)->varId());
                 }
 
                 checkScope(tok2->next(), &varInfo1, notzero);
@@ -389,16 +397,18 @@ void CheckLeakAutoVar::checkScope(const Token * const startToken,
 
 void CheckLeakAutoVar::functionCall(const Token *tok, VarInfo *varInfo, const int dealloc)
 {
-    std::map<unsigned int, int> &alloctype = varInfo->alloctype;
-    std::map<unsigned int, std::string> &possibleUsage = varInfo->possibleUsage;
-
     // Ignore function call?
     const bool ignore = bool(_settings->library.leakignore.find(tok->str()) != _settings->library.leakignore.end());
-
     if (ignore)
         return;
 
+    std::map<unsigned int, int> &alloctype = varInfo->alloctype;
+    std::map<unsigned int, std::string> &possibleUsage = varInfo->possibleUsage;
+
     for (const Token *arg = tok->tokAt(2); arg; arg = arg->nextArgument()) {
+        if (arg->str() == "new")
+            arg = arg->next();
+
         if ((Token::Match(arg, "%var% [-,)]") && arg->varId() > 0) ||
             (Token::Match(arg, "& %var%") && arg->next()->varId() > 0)) {
 

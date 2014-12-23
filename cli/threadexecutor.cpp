@@ -20,6 +20,9 @@
 #include "cppcheck.h"
 #include "cppcheckexecutor.h"
 #include <iostream>
+#ifdef __SVR4  // Solaris
+#include <sys/loadavg.h>
+#endif
 #ifdef THREADING_MODEL_FORK
 #include <algorithm>
 #include <sys/select.h>
@@ -138,12 +141,12 @@ int ThreadExecutor::handleRead(int rpipe, unsigned int &result)
     return 1;
 }
 
-bool ThreadExecutor::checkLoadAverage(size_t nchilds)
+bool ThreadExecutor::checkLoadAverage(size_t nchildren)
 {
-#ifdef __CYGWIN__  // getloadavg() is unsupported on Cygwin.
+#if defined(__CYGWIN__) || defined(__QNX__)  // getloadavg() is unsupported on Cygwin, Qnx.
     return true;
 #else
-    if (!nchilds || !_settings._loadAverage) {
+    if (!nchildren || !_settings._loadAverage) {
         return true;
     }
 
@@ -175,8 +178,8 @@ unsigned int ThreadExecutor::check()
     std::map<std::string, std::size_t>::const_iterator i = _files.begin();
     for (;;) {
         // Start a new child
-        size_t nchilds = rpipes.size();
-        if (i != _files.end() && nchilds < _settings._jobs && checkLoadAverage(nchilds)) {
+        size_t nchildren = rpipes.size();
+        if (i != _files.end() && nchildren < _settings._jobs && checkLoadAverage(nchildren)) {
             int pipes[2];
             if (pipe(pipes) == -1) {
                 std::cerr << "pipe() failed: "<< std::strerror(errno) << std::endl;
@@ -457,8 +460,14 @@ unsigned int __stdcall ThreadExecutor::threadProc(void *args)
 
         LeaveCriticalSection(&threadExecutor->_fileSync);
     };
-
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning( disable : 4702 )
+#endif
     return result;
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
 }
 
 void ThreadExecutor::reportOut(const std::string &outmsg)
